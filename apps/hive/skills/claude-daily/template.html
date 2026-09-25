@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Daily — {{DATE_SHORT}}</title>
+<style>
+  body { margin: 0; padding: 0; background: #f6f5f1; color: #1a1a1a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  a { color: #b85a3e; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: 'SF Mono', Consolas, 'Cascadia Code', monospace; font-size: 0.88em; background: #f3f3f0; border: 1px solid #e0e0e0; border-radius: 4px; padding: 1px 6px; color: #b85a3e; }
+  .wrap { max-width: 760px; margin: 0 auto; background: #ffffff; padding: 40px 32px 56px; }
+
+  /* HEADER */
+  .top { border-bottom: 2px solid #DA7756; padding-bottom: 24px; margin-bottom: 32px; }
+  .eyebrow { color: #DA7756; font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 10px; }
+  h1 { margin: 0 0 14px; font-size: 32px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15; color: #1a1a1a; }
+  .lede { font-size: 16px; color: #404040; margin: 0; line-height: 1.55; }
+
+  /* SECTION HEADERS */
+  h2 { font-size: 22px; margin: 40px 0 16px; letter-spacing: -0.01em; font-weight: 700; color: #1a1a1a; }
+  h2 .label { color: #6b6b6b; font-size: 12px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; margin-left: 10px; }
+  h3 { font-size: 17px; margin: 0 0 8px; font-weight: 600; letter-spacing: -0.005em; color: #1a1a1a; }
+  p { margin: 0 0 12px; color: #2d2d2d; line-height: 1.6; }
+
+  /* HERO / TOP STORY */
+  .hero { background: #fff8f4; border: 1px solid #f0c8b5; border-left: 4px solid #DA7756; border-radius: 12px; padding: 24px 26px; }
+  .hero .tag { color: #DA7756; font-weight: 700; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 10px; display: block; }
+  .hero h3 { font-size: 20px; margin-bottom: 12px; line-height: 1.3; }
+  .hero p { font-size: 14px; color: #2d2d2d; }
+
+  /* STAT GRID */
+  .stat-grid { margin: 18px 0 0; }
+  .stat { display: inline-block; vertical-align: top; width: 47%; margin: 4px 1.5%; background: #ffffff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 14px 16px; }
+  .stat .n { font-size: 20px; font-weight: 700; color: #1a1a1a; letter-spacing: -0.01em; }
+  .stat .l { font-size: 11px; color: #6b6b6b; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
+
+  /* CLAUDE CORNER — distinct warmer treatment */
+  .claude-corner { background: #fffaf6; border: 1px solid #f0c8b5; border-radius: 12px; padding: 20px 22px 10px; margin-top: 16px; }
+  .claude-corner > h2 { margin-top: 0; }
+
+  /* CARDS */
+  .card { background: #ffffff; border: 1px solid #e5e5e5; border-radius: 10px; padding: 16px 18px; margin: 10px 0; }
+  .claude-corner .card { background: #ffffff; border-color: #f0c8b5; }
+  .card p { font-size: 14px; color: #2d2d2d; margin: 6px 0 0; }
+  .card .meta { color: #6b6b6b; font-size: 12.5px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #f0f0f0; }
+
+  /* BADGES */
+  .badge { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; margin-bottom: 8px; border: 1px solid; }
+  .badge.model    { background: #f0fdf4; color: #15803d; border-color: #bbf7d0; }
+  .badge.product  { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+  .badge.policy   { background: #fff7ed; color: #c2410c; border-color: #fed7aa; }
+  .badge.research { background: #faf5ff; color: #7e22ce; border-color: #e9d5ff; }
+  .badge.update   { background: #fefce8; color: #a16207; border-color: #fef08a; }
+  .badge.sdk      { background: #fff1ea; color: #b85a3e; border-color: #f0c8b5; }
+
+  /* X CARDS */
+  .x-card { background: #ffffff; border: 1px solid #e5e5e5; border-left: 3px solid #DA7756; border-radius: 8px; padding: 12px 16px; margin-bottom: 8px; }
+  .x-card .who { font-size: 13px; color: #DA7756; font-weight: 700; }
+  .x-card .said { font-size: 14px; color: #1a1a1a; margin: 4px 0 6px; line-height: 1.5; }
+  .x-card .why { font-size: 12.5px; color: #525252; line-height: 1.5; }
+  .x-card a { color: #b85a3e; font-size: 12px; }
+
+  /* RADAR */
+  ul.radar { list-style: none; padding: 0; margin: 0; }
+  ul.radar li { padding: 11px 0; border-bottom: 1px solid #e8e8e8; font-size: 14px; color: #2d2d2d; line-height: 1.5; }
+  ul.radar li:last-child { border-bottom: none; }
+  ul.radar li strong { color: #1a1a1a; font-weight: 700; }
+
+  /* WRAP-UP */
+  .wrap-up { background: #fff8f4; border: 1px solid #f0c8b5; border-radius: 12px; padding: 20px 22px; margin-top: 36px; }
+  .wrap-up h2 { margin-top: 0; }
+  .wrap-up p { color: #2d2d2d; font-size: 14px; }
+
+  /* FOOTER */
+  footer { margin-top: 36px; padding-top: 20px; border-top: 1px solid #e5e5e5; color: #6b6b6b; font-size: 12px; }
+  footer a { color: #525252; }
+  footer a:hover { color: #DA7756; }
+  footer p { color: #6b6b6b; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">{{HERO_EYEBROW}}</div>
+  <h1>{{HERO_TITLE}}</h1>
+  <p class="lede">{{HERO_LEDE}}</p>
+</header>
+
+<!-- TOP STORY -->
+<section>
+  <h2>Top Story <span class="label">{{TOP_STORY_LABEL}}</span></h2>
+  <div class="hero">
+    <span class="tag">{{TOP_STORY_TAG}}</span>
+    <h3>{{TOP_STORY_TITLE}}</h3>
+    {{TOP_STORY_BODY}}
+    {{TOP_STORY_STATS}}
+  </div>
+</section>
+
+<!-- CLAUDE CORNER -->
+<section class="claude-corner">
+  <h2>Claude Corner <span class="label">For people building on Claude</span></h2>
+  {{CLAUDE_CORNER_CARDS}}
+</section>
+
+<!-- ACROSS THE ECOSYSTEM -->
+<section>
+  <h2>Across the Ecosystem <span class="label">Competitive context</span></h2>
+  {{ECOSYSTEM_CARDS}}
+</section>
+
+<!-- FROM X -->
+<section>
+  <h2>From X <span class="label">Threads worth surfacing</span></h2>
+  {{X_CARDS}}
+</section>
+
+<!-- ON THE RADAR -->
+<section>
+  <h2>On The Radar <span class="label">One-liners</span></h2>
+  <ul class="radar">
+    {{RADAR_ITEMS}}
+  </ul>
+</section>
+
+<!-- WRAP-UP (skill emits empty string to omit) -->
+{{WRAP_UP}}
+
+<footer>
+  <p>Sources: {{SOURCES}}</p>
+  <p>Generated automatically by Hive. Editorial filter applied — small product tweaks, regional rollouts, and unconfirmed rumor cycles were excluded. Items already covered in the last 7 days are deduped.</p>
+</footer>
+
+</div>
+</body>
+</html>

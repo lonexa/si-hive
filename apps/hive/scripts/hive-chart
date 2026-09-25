@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# hive-chart — POSIX shim that hands off to the Node CLI.
+# Companion to hive-chart.cmd. Hive prepends this directory to PATH for every
+# spawned PTY so agents can invoke the tool via plain `hive-chart <subcommand> ...`.
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+exec node "$DIR/hive-chart.cjs" "$@"

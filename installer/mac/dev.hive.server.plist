@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent template for Hive on macOS.
+  Placeholders are replaced by installer/mac/install.sh and
+  scripts/install-launchagent.cjs:
+    @@HIVE_HOME@@   — app root (the monorepo root, e.g. ~/Library/Hive/app)
+    @@NODE_BIN@@    — path to the bundled Node binary
+    @@LOG_FILE@@    — path to server log
+    @@HIVE_PORT@@   — HTTP port (default 4747)
+    @@PATH@@        — PATH for the server (launchd's default is only /usr/bin:/bin:...)
+    @@USER_HOME@@   — the user's home directory
+    @@SERVICE_USER@@ — the user's login name (HIVE_SERVICE_USER, as on Windows)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.hive.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@@NODE_BIN@@</string>
+    <string>@@HIVE_HOME@@/scripts/startup.cjs</string>
+    <string>--app=hive</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>@@HIVE_HOME@@</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HIVE_PORT</key>
+    <string>@@HIVE_PORT@@</string>
+    <key>HIVE_SERVICE</key>
+    <string>1</string>
+    <key>NODE_ENV</key>
+    <string>production</string>
+    <key>HOME</key>
+    <string>@@USER_HOME@@</string>
+    <!-- Marks this as the installed instance: attributes time tracking to this
+         user and lets the server register its Claude hooks at startup. -->
+    <key>HIVE_SERVICE_USER</key>
+    <string>@@SERVICE_USER@@</string>
+    <key>PATH</key>
+    <string>@@PATH@@</string>
+    <key>PLAYWRIGHT_BROWSERS_PATH</key>
+    <string>@@HIVE_HOME@@/.playwright-browsers</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- The updater exits the process after a rebuild and relies on launchd
+       to start it again, the same way NSSM does on Windows. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>@@LOG_FILE@@</string>
+  <key>StandardErrorPath</key>
+  <string>@@LOG_FILE@@</string>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>

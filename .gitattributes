@@ -1,0 +1,12 @@
+# Normalize text to LF in the repo; Windows-only scripts keep CRLF.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.nsi text eol=crlf
+
+# nssm.exe is stored base64-encoded, NOT as a binary: endpoint protection can
+# quarantine a real .exe the instant the updater writes it, which would abort
+# the whole update. build-installer.cmd decodes it.
+installer/nssm.exe.b64 -text
+
+*.png binary
+*.gif binary

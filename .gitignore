@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.hive-tmp/
+
+# Environment
+.env
+.env.*
+
+# Database
+*.db
+*.db-journal
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings (contains user-specific permissions)
+.claude/
+
+# Playwright MCP logs
+.playwright-mcp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Screenshots and docs (local reference only)
+*.png
+!docs/*.png
+*.docx
+.~lock.*
+
+# Vite
+*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Misc
+@/
+installer/.env.lite
+installer/.env.lite.enc
+
+# Installer build artifacts (portable runtimes are too large for git)
+installer/portable/
+installer/source/
+installer/db-config.json
+installer/*.exe
+installer/*.zip
+installer/mac/.node-cache/
+db-config.json
+
+# Installer bundles
+installer/HiveMac.zip
+
+# Local deny-list for check-generic (org identifiers — never commit)
+scripts/check-generic.local.txt
