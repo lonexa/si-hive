@@ -107,6 +107,18 @@ Section "Install"
   nsExec::ExecToLog 'reg delete "HKLM\SYSTEM\CurrentControlSet\Services\${SERVICE_NAME}" /f'
   Sleep 1000
 
+  ; How to run: as this user at login (recommended), or as a background service.
+  StrCpy $R9 "login"
+  ReadEnvStr $R8 USERNAME
+  MessageBox MB_YESNO|MB_ICONQUESTION "Run SI Hive as $R8, starting automatically when you log in? (Recommended)$\r$\n$\r$\nYes: SI Hive runs in your desktop session. AI sessions run as you, git trusts your projects, and browsers and the GPU are available. It runs while you are logged in.$\r$\n$\r$\nNo: SI Hive runs as a background Windows service (SYSTEM account) that starts at boot, before anyone logs in." /SD IDYES IDNO ServiceMode
+    DetailPrint "Setting up SI Hive to start at login..."
+    nsExec::ExecToLog '"$INSTDIR\node\node.exe" "$INSTDIR\app\scripts\install-autostart-windows.cjs" --port=${PRODUCT_PORT}'
+    Pop $0
+    DetailPrint "Login setup exit code: $0"
+    IntCmp $0 0 LoginModeDone
+      MessageBox MB_OK|MB_ICONEXCLAMATION "Could not set SI Hive to start at login (exit code $0). Installing it as a Windows service instead."
+  ServiceMode:
+
   ; Write user home path for service context (NSSM runs as SYSTEM)
   FileOpen $0 "$INSTDIR\user-home.txt" w
   FileWrite $0 "$PROFILE"
@@ -130,13 +142,12 @@ Section "Install"
   nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppRotateFiles 1'
   nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppRotateOnline 1'
   nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppRotateBytes 5242880'
-  nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppEnvironmentExtra "HIVE_PORT=${PRODUCT_PORT}"'
-  nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppEnvironmentExtra +"NODE_ENV=production"'
-  nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppEnvironmentExtra +"HIVE_SERVICE=1"'
-  nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppEnvironmentExtra +"USERPROFILE=$PROFILE"'
-  nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppEnvironmentExtra +"HOME=$PROFILE"'
-  nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppEnvironmentExtra +"PLAYWRIGHT_BROWSERS_PATH=$INSTDIR\app\.playwright-browsers"'
+  ; One call with every value: the bundled NSSM has no "+" append syntax, so
+  ; separate calls each replaced the list (leaving only a literal "+PLAYWRIGHT...").
+  nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} AppEnvironmentExtra "HIVE_PORT=${PRODUCT_PORT}" "NODE_ENV=production" "HIVE_SERVICE=1" "USERPROFILE=$PROFILE" "HOME=$PROFILE" "PLAYWRIGHT_BROWSERS_PATH=$INSTDIR\app\.playwright-browsers"'
   nsExec::ExecToLog '"$INSTDIR\nssm.exe" set ${SERVICE_NAME} Start SERVICE_AUTO_START'
+  StrCpy $R9 "service"
+  LoginModeDone:
 
   ; Firewall
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="${PRODUCT_NAME}" dir=in action=allow protocol=TCP localport=${PRODUCT_PORT}'
@@ -158,12 +169,17 @@ Section "Install"
   WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" "NoRepair" 1
 
   ; Start
-  DetailPrint "Starting ${PRODUCT_NAME}..."
-  nsExec::ExecToLog '"$INSTDIR\nssm.exe" start ${SERVICE_NAME}'
+  ; (Login mode was already started by install-autostart-windows.cjs.)
+  StrCmp $R9 "service" 0 +3
+    DetailPrint "Starting ${PRODUCT_NAME}..."
+    nsExec::ExecToLog '"$INSTDIR\nssm.exe" start ${SERVICE_NAME}'
   DetailPrint "SI Hive is available at http://localhost:${PRODUCT_PORT}"
 SectionEnd
 
 Section "Uninstall"
+  ; Login mode: remove the login entry and stop the per-user server.
+  IfFileExists "$INSTDIR\app\scripts\uninstall-autostart-windows.cjs" 0 +2
+    nsExec::ExecToLog '"$INSTDIR\node\node.exe" "$INSTDIR\app\scripts\uninstall-autostart-windows.cjs" --stop'
   nsExec::ExecToLog '"$INSTDIR\nssm.exe" stop ${SERVICE_NAME}'
   Sleep 3000
   nsExec::ExecToLog '"$INSTDIR\nssm.exe" remove ${SERVICE_NAME} confirm'

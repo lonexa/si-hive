@@ -15,11 +15,13 @@ export default function AppLayout() {
   useNowPublisher(isAuthenticated && hasAccess('team-dashboard'));
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    // h-dvh, not h-screen: on phones 100vh includes the area behind the
+    // browser's address bar, which pushed the bottom of the page off screen.
+    <div className="flex h-dvh overflow-hidden">
       <Sidebar />
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-2 md:p-6">
           <Outlet />
         </main>
       </div>

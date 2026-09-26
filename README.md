@@ -55,6 +55,21 @@ Open <http://localhost:4747>. SI Hive discovers Claude Code sessions from `~/.cl
 
 For an installed background service, build the Windows installer (`installer\build-installer.cmd`) or the macOS bundle (`installer/mac/`).
 
+### Windows: run at login (recommended) or as a service
+
+The Windows installer asks how SI Hive should run:
+
+- **At login, as you (recommended).** SI Hive runs in your desktop session. AI sessions run as you, so git trusts your repositories, terminals use ConPTY, and browsers and the GPU are available. It runs while you are logged in.
+- **As a Windows service.** SI Hive starts at boot, before anyone logs in, as the SYSTEM account in Windows' hidden service session.
+
+To switch an existing service install to login mode, run this from an administrator PowerShell, signed in as the user SI Hive should run as. It carries over the service's `HIVE_*` settings, stops the service, sets it to manual, and starts SI Hive:
+
+```powershell
+& "C:\Program Files (x86)\SI Hive\node\node.exe" "C:\Program Files (x86)\SI Hive\app\scripts\install-autostart-windows.cjs" --replace-service
+```
+
+To switch back: `...\scripts\uninstall-autostart-windows.cjs --stop --restore-service`. For a source checkout, run the same scripts with your own `node`.
+
 ## Configuration
 
 Everything lives in the SI Hive data directory — `~/.hive/` by default, or `$HIVE_HOME` if set (use this to run a second, isolated instance):

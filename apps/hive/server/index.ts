@@ -32,9 +32,9 @@ import { focusPane } from './actions/terminal.js';
 import { sendInput } from './actions/send-input.js';
 import { deleteTeam } from './actions/cleanup.js';
 import { Notifier } from './notifications/notifier.js';
-import { spawnPty, getPtySession, destroyPty, destroyAllPtys, attachWebSocket, detachWebSocket, writeToPtyBySessionId, renamePtySession } from './terminal-pty.js';
+import { spawnPty, getPtySession, destroyPty, destroyAllPtys, attachWebSocket, detachWebSocket, writeToPtyBySessionId, renamePtySession, resizePty } from './terminal-pty.js';
 import { decodeWindowsProjectDir } from './parsers/process-discovery-windows.js';
-import { isWindows } from './platform.js';
+import { isWindows, isWindowsService } from './platform.js';
 import { QueueEngine } from './queue/queue-engine.js';
 import { getAllProviderStatus, getProvider, getEnabledProviders } from './providers/registry.js';
 import { syncSkillToProviders, removeSkillFromProviders, syncAllSkills } from './providers/skill-sync.js';
@@ -146,6 +146,20 @@ const INSTRUCTION_FILES: Record<string, { filename: string; subdir?: string; glo
   gemini: { filename: 'GEMINI.md', globalHome: path.join(os.homedir(), '.gemini') },
   codex: { filename: 'AGENTS.md', globalHome: path.join(os.homedir(), '.codex') },
 };
+
+// --- Git ownership check when running as a Windows service ---
+// As a service SI Hive runs as SYSTEM, so every project folder is owned by
+// another account and git refuses it ("detected dubious ownership") — in AI
+// sessions and in SI Hive's own git calls. Trust project folders for every
+// process SI Hive launches, via git's env-based config (it counts as
+// command-line config, where safe.directory is honored). Global git config is
+// left untouched.
+if (isWindowsService()) {
+  const n = parseInt(process.env.GIT_CONFIG_COUNT || '', 10) || 0;
+  process.env[`GIT_CONFIG_KEY_${n}`] = 'safe.directory';
+  process.env[`GIT_CONFIG_VALUE_${n}`] = '*';
+  process.env.GIT_CONFIG_COUNT = String(n + 1);
+}
 
 // --- Load config and initialize ---
 const config = loadConfig();
@@ -354,7 +368,7 @@ function isAllowedHost(hostHeader: string | undefined): boolean {
   // allowed unless an explicit allowlist is configured.
   const extra = extraAllowedHosts();
   if (extra.length > 0) return extra.includes(name);
-  return HOST !== '127.0.0.1';
+  return HOSTS.some((h) => h !== '127.0.0.1');
 }
 
 /** Same-origin, or a local dev frontend on another localhost port. */
@@ -2119,8 +2133,7 @@ wssTerm.on('connection', (ws, req: http.IncomingMessage) => {
         case 'resize': {
           if (ptyReady && msg.cols && msg.rows) {
             const currentId = (ws as WebSocket & { _termId?: string })._termId ?? termId;
-            const session = getPtySession(currentId);
-            if (session && !session.exited) session.pty.resize(msg.cols, msg.rows);
+            resizePty(currentId, msg.cols, msg.rows);
           }
           break;
         }
@@ -4259,15 +4272,33 @@ function serveStatic(pathname: string, distDir: string, res: http.ServerResponse
 // --- Start Server ---
 // Single-user (no login) installs listen on loopback only, so nothing else on
 // the network can drive sessions. With login enabled — or HIVE_HOST set — the
-// server can be exposed to other machines.
-const HOST = process.env.HIVE_HOST || (isAuthEnabled(config) ? '0.0.0.0' : '127.0.0.1');
-if (HOST === '127.0.0.1') {
+// server can be exposed to other machines. HIVE_HOST may list several
+// addresses (e.g. "127.0.0.1,100.x.y.z" for loopback plus a Tailscale IP); the
+// first is the primary listener.
+const HOSTS = (process.env.HIVE_HOST || (isAuthEnabled(config) ? '0.0.0.0' : '127.0.0.1'))
+  .split(',').map((h) => h.trim()).filter(Boolean);
+const HOST = HOSTS[0];
+if (HOSTS.includes('127.0.0.1')) {
   // Some clients resolve "localhost" to ::1 first; answer there too. Best
   // effort — hosts without IPv6 just skip it.
   const server6 = http.createServer(requestListener);
   server6.on('upgrade', handleUpgrade);
   server6.on('error', (err) => console.warn(`[server] IPv6 loopback listener unavailable: ${(err as Error).message}`));
   server6.listen(PORT, '::1');
+}
+// Extra addresses are best effort: a VPN interface (e.g. Tailscale) may not be
+// up yet at boot, so retry instead of failing the whole server.
+for (const extraHost of HOSTS.slice(1)) {
+  const listenExtra = () => {
+    const extra = http.createServer(requestListener);
+    extra.on('upgrade', handleUpgrade);
+    extra.once('error', (err) => {
+      console.warn(`[server] Cannot listen on ${extraHost}:${PORT} (${(err as Error).message}); retrying in 30s`);
+      setTimeout(listenExtra, 30_000);
+    });
+    extra.listen(PORT, extraHost, () => console.log(`[server] Also listening on ${extraHost}:${PORT}`));
+  };
+  listenExtra();
 }
 // A failed bind is fatal — without this the crash guard above would keep a
 // port-less zombie process alive.
@@ -4276,7 +4307,7 @@ server.on('error', (err: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 server.listen(PORT, HOST, () => {
-  console.log(`\n  SI Hive server v${process.env.npm_package_version || '0.1.0'} running at http://localhost:${PORT} (listening on ${HOST})`);
+  console.log(`\n  SI Hive server v${process.env.npm_package_version || '0.1.0'} running at http://localhost:${PORT} (listening on ${HOSTS.join(', ')})`);
   console.log(`  WebSocket available at ws://localhost:${PORT}`);
   console.log(`  Health check: http://localhost:${PORT}/api/health`);
   console.log(`  Dashboard state: http://localhost:${PORT}/api/state\n`);

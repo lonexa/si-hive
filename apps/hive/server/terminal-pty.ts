@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { isWindows } from './platform.js';
+import { isWindows, isWindowsService } from './platform.js';
 
 /**
  * Directory holding the Hive-bundled agent tools (hive-img, hive-chart, …).
@@ -68,8 +68,11 @@ export interface PtySession {
   autoTrustDone?: boolean;
   /** Buffered output while no WebSocket is attached */
   outputBuffer: string;
-  /** Currently attached WebSocket (null when detached/navigated away) */
-  ws: WebSocket | null;
+  /**
+   * Attached WebSockets. Several clients (e.g. a desktop tab and a phone) can
+   * watch the same PTY; output is broadcast to all of them. Empty = detached.
+   */
+  clients: Set<WebSocket>;
   /** Whether the PTY process has exited */
   exited: boolean;
   /** Exit code if process has exited */
@@ -94,6 +97,8 @@ export interface PtySession {
    * leak raw base64 into the terminal on resume).
    */
   injectedImagePaths: string[];
+  /** Pending second step of a widening resize (see resizePty). */
+  resizeTimer?: ReturnType<typeof setTimeout>;
 }
 
 /** Max images to remember per session for resume-replay. */
@@ -196,6 +201,24 @@ function resolveCommand(cmd: string): string {
   return cmd;
 }
 
+/** Send a message to one WebSocket if it is open. */
+function sendTo(ws: WebSocket, msg: unknown): void {
+  if (ws.readyState !== 1 /* WebSocket.OPEN */) return;
+  try {
+    ws.send(JSON.stringify(msg));
+  } catch { /* WebSocket send failed, ignore */ }
+}
+
+/** Send a message to every WebSocket attached to a session. */
+function broadcast(session: PtySession, msg: unknown): void {
+  if (session.clients.size === 0) return;
+  const payload = JSON.stringify(msg);
+  for (const ws of session.clients) {
+    if (ws.readyState !== 1) continue;
+    try { ws.send(payload); } catch { /* ignore */ }
+  }
+}
+
 /**
  * Start the orphan cleanup timer for a detached session.
  * If no WebSocket reattaches within ORPHAN_TTL_MS, the PTY is destroyed.
@@ -203,7 +226,7 @@ function resolveCommand(cmd: string): string {
 function startOrphanTimer(session: PtySession): void {
   clearOrphanTimer(session);
   session.orphanTimer = setTimeout(() => {
-    if (!session.ws && !session.exited) {
+    if (session.clients.size === 0 && !session.exited) {
       console.log(`[pty] Orphan timeout reached for ${session.id}, destroying`);
       destroyPty(session.id);
     }
@@ -443,9 +466,9 @@ export async function spawnPty(
     }
   }
 
-  const isService = process.env.HIVE_SERVICE === '1' || !process.env.SESSIONNAME;
+  const isService = isWindowsService();
   const useConpty = !isService;
-  console.log(`[pty] Spawning: ${shell} ${shellArgs.join(' ')} in ${safeCwd} (useConpty=${useConpty}, isService=${isService}, HIVE_SERVICE=${process.env.HIVE_SERVICE}, SESSIONNAME=${process.env.SESSIONNAME})`);
+  console.log(`[pty] Spawning: ${shell} ${shellArgs.join(' ')} in ${safeCwd} (useConpty=${useConpty}, isService=${isService}, HIVE_SERVICE=${process.env.HIVE_SERVICE})`);
 
   // Use winpty instead of ConPTY when running as a Windows service (session 0).
   // ConPTY in session 0 does not process pty.write() control characters (\r, \n)
@@ -466,7 +489,7 @@ export async function spawnPty(
     accountId,
     autoTrustDone: false,
     outputBuffer: '',
-    ws: null,
+    clients: new Set(),
     exited: false,
     orphanTimer: null,
     dataDisposable: null,
@@ -481,11 +504,7 @@ export async function spawnPty(
   session.dataDisposable = ptyProcess.onData((data: string) => {
     appendBuffer(session, data);
     noteActivityBytes(session.id, data.length, { provider: providerId });
-    if (session.ws && session.ws.readyState === 1 /* WebSocket.OPEN */) {
-      try {
-        session.ws.send(JSON.stringify({ type: 'output', data }));
-      } catch { /* WebSocket send failed, ignore */ }
-    }
+    broadcast(session, { type: 'output', data });
   });
 
   // Set up onExit listener
@@ -493,11 +512,7 @@ export async function spawnPty(
     console.log(`[pty] PTY exited for ${session.id} with code ${exitCode}`);
     session.exited = true;
     session.exitCode = exitCode;
-    if (session.ws && session.ws.readyState === 1) {
-      try {
-        session.ws.send(JSON.stringify({ type: 'exit', code: exitCode }));
-      } catch { /* ignore */ }
-    }
+    broadcast(session, { type: 'exit', code: exitCode });
     // Clean up after exit — no point keeping dead sessions
     clearOrphanTimer(session);
     forgetActivitySession(id);
@@ -604,11 +619,7 @@ function buildInlineImageEscape(absPath: string): string | null {
  * position before/after writing and map clicks back to the right path.
  */
 function sendInlineEscape(session: PtySession, escape: string, absPath: string): void {
-  if (session.ws && session.ws.readyState === 1) {
-    try {
-      session.ws.send(JSON.stringify({ type: 'inline-image', data: escape, path: absPath }));
-    } catch { /* ignore */ }
-  }
+  broadcast(session, { type: 'inline-image', data: escape, path: absPath });
 }
 
 /**
@@ -675,14 +686,11 @@ export function getInjectedImagePaths(sessionId: string): string[] {
  * into this session. Called after the text buffer is replayed on reconnect.
  * Files that no longer exist are silently skipped.
  */
-function replayInjectedImages(session: PtySession): void {
-  if (!session.ws || session.ws.readyState !== 1) return;
+function replayInjectedImages(session: PtySession, ws: WebSocket): void {
   for (const p of session.injectedImagePaths) {
     const escape = buildInlineImageEscape(p);
     if (!escape) continue;
-    try {
-      session.ws.send(JSON.stringify({ type: 'inline-image', data: escape, path: p }));
-    } catch { /* ignore */ }
+    sendTo(ws, { type: 'inline-image', data: escape, path: p });
   }
 }
 
@@ -705,26 +713,25 @@ export function attachWebSocket(id: string, ws: WebSocket): boolean {
   // Cancel orphan timer since we have a new connection
   clearOrphanTimer(session);
 
-  // Detach old WebSocket if any (don't close it, just unlink)
-  session.ws = ws;
+  // Join any other viewers (e.g. desktop + phone) rather than replacing them
+  session.clients.add(ws);
+
+  // Tell the new viewer the PTY's size, so a phone can render at it
+  sendTo(ws, { type: 'size', cols: session.pty.cols, rows: session.pty.rows });
 
   // Replay buffered output so the terminal shows history
-  if (session.outputBuffer.length > 0 && ws.readyState === 1) {
-    try {
-      ws.send(JSON.stringify({ type: 'output', data: session.outputBuffer }));
-    } catch { /* ignore */ }
+  if (session.outputBuffer.length > 0) {
+    sendTo(ws, { type: 'output', data: session.outputBuffer });
   }
 
   // Replay any inline images we previously injected — fresh escapes built
   // from the on-disk files, so the base64 doesn't have to survive in the
   // (capped) text buffer.
-  replayInjectedImages(session);
+  replayInjectedImages(session, ws);
 
   // If the process already exited, notify the new WebSocket
   if (session.exited) {
-    try {
-      ws.send(JSON.stringify({ type: 'exit', code: session.exitCode ?? -1 }));
-    } catch { /* ignore */ }
+    sendTo(ws, { type: 'exit', code: session.exitCode ?? -1 });
   }
 
   return true;
@@ -739,12 +746,9 @@ export function detachWebSocket(id: string, ws: WebSocket): void {
   const session = activeSessions.get(id);
   if (!session) return;
 
-  // Only detach if this is the currently attached WebSocket
-  if (session.ws === ws) {
-    session.ws = null;
-    if (!session.exited) {
-      startOrphanTimer(session);
-    }
+  // Start the orphan timer only once the last viewer has left
+  if (session.clients.delete(ws) && session.clients.size === 0 && !session.exited) {
+    startOrphanTimer(session);
   }
 }
 
@@ -766,7 +770,7 @@ export function destroyPty(id: string): void {
   const session = activeSessions.get(id);
   if (session) {
     clearOrphanTimer(session);
-    session.ws = null;
+    session.clients.clear();
     if (session.dataDisposable) session.dataDisposable.dispose();
     if (session.interceptorDisposable) session.interceptorDisposable.dispose();
     if (session.exitDisposable) session.exitDisposable.dispose();
@@ -810,40 +814,56 @@ export function writeToPtyWithActivation(id: string, data: string): boolean {
   const session = activeSessions.get(id);
   if (!session || session.exited) return false;
 
-  const hadWs = !!session.ws;
-
-  // If no WebSocket attached, temporarily fake one to activate ConPTY
-  if (!session.ws) {
-    session.ws = {
-      readyState: 1,
-      send: () => {},
-      close: () => {},
-    } as unknown as WebSocket;
-  }
+  // If no WebSocket attached, temporarily add a no-op consumer to activate ConPTY
+  const fake = session.clients.size === 0
+    ? ({ readyState: 1, send: () => {}, close: () => {} } as unknown as WebSocket)
+    : null;
+  if (fake) session.clients.add(fake);
 
   try {
     session.pty.write(data);
   } catch {
+    if (fake) session.clients.delete(fake);
     return false;
   }
 
-  // Remove fake WebSocket after a brief delay to let ConPTY process
-  if (!hadWs) {
-    setTimeout(() => {
-      if (session.ws && typeof (session.ws as any).close === 'function'
-          && (session.ws as any).send === (() => {}).constructor) {
-        // Still our fake — remove it
-      }
-      // Actually, just check if it's still the fake by comparing
-      if (!hadWs && session.ws && (session.ws as any)._isFake) {
-        session.ws = null;
-      }
-    }, 1000);
-    // Mark as fake
-    (session.ws as any)._isFake = true;
-  }
+  // Remove the fake consumer after a brief delay to let ConPTY process
+  if (fake) setTimeout(() => session.clients.delete(fake), 1000);
 
   return true;
+}
+
+/**
+ * Resize a PTY. No-op resizes are skipped (a desktop tab re-sends its size when
+ * it reconnects), since a real resize makes the CLI redraw.
+ *
+ * Widening goes one column past the target and then back. Claude Code on
+ * Windows reliably redraws on a shrink but often misses a plain grow, leaving
+ * it drawn at the old, narrower width.
+ */
+export function resizePty(id: string, cols: number, rows: number): void {
+  const session = activeSessions.get(id);
+  if (!session || session.exited) return;
+  if (session.resizeTimer) {
+    clearTimeout(session.resizeTimer);
+    session.resizeTimer = undefined;
+  }
+  if (session.pty.cols === cols && session.pty.rows === rows) return;
+  // Viewers that don't size the PTY themselves (phones) follow along.
+  broadcast(session, { type: 'size', cols, rows });
+  try {
+    if (cols > session.pty.cols) {
+      session.pty.resize(cols + 1, rows);
+      session.resizeTimer = setTimeout(() => {
+        session.resizeTimer = undefined;
+        if (!session.exited) {
+          try { session.pty.resize(cols, rows); } catch { /* exited */ }
+        }
+      }, 150);
+    } else {
+      session.pty.resize(cols, rows);
+    }
+  } catch { /* exited */ }
 }
 
 /**

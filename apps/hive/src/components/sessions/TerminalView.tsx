@@ -3,6 +3,7 @@ import type { Terminal } from '@xterm/xterm';
 import type { SearchAddon } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { WS_BASE, API_BASE } from '@/lib/api-config';
+import { isTouchDevice } from '@/lib/device';
 import { extractSessionIdFromArgs } from '@/lib/launch-flags';
 import { createTerminal, loadEnhancements, pixelToBufferCell, type ImageLookup } from './terminal-setup';
 import { getTheme } from './themes';
@@ -137,6 +138,9 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
   const searchRef = useRef<SearchAddon | null>(null);
   const imageRef = useRef<ImageLookup | null>(null);
   const imagePositionsRef = useRef<Array<{ path: string; lineStart: number; lineEnd: number }>>([]);
+  // Image files the CLI read this session (newest first), previewed on hover.
+  const hoverImagePathsRef = useRef<string[]>([]);
+  const [hoverImage, setHoverImage] = useState<{ path: string; x: number; y: number } | null>(null);
   const toolDecoRef = useRef<ToolDecorationController | null>(null);
   const ambientActivityRef = useRef<BackdropActivity>({ lastOutputAt: 0, lastToolAt: 0, lastToolName: null });
   const webglDisposerRef = useRef<(() => void) | null>(null);
@@ -319,30 +323,15 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
             break;
           }
           case 'inline-image': {
-            // Server-injected inline image. Capture cursor position before
-            // and after writing so we can map a click back to this path.
-            if (msg.data) {
-              ambientActivityRef.current.lastOutputAt = performance.now();
-              const buf = term.buffer.active;
-              const beforeLine = buf.baseY + buf.cursorY;
-              term.write(msg.data, () => {
-                const after = term.buffer.active;
-                const afterLine = after.baseY + after.cursorY;
-                if (msg.path) {
-                  // Drop any previous entry for this path so re-injections
-                  // (e.g., after resume) don't accumulate stale ranges.
-                  imagePositionsRef.current = imagePositionsRef.current.filter(e => e.path !== msg.path);
-                  imagePositionsRef.current.push({
-                    path: msg.path,
-                    lineStart: Math.min(beforeLine, afterLine),
-                    lineEnd: Math.max(beforeLine, afterLine),
-                  });
-                  // Cap to avoid unbounded growth in long sessions.
-                  if (imagePositionsRef.current.length > 50) {
-                    imagePositionsRef.current.shift();
-                  }
-                }
-              });
+            // Image previews are shown on hover, never written into the
+            // terminal: an image drawn only in this browser shifts every row
+            // below it out of line with the CLI (duplicate input box, clicks
+            // landing off-target). Just remember the file for hover lookup.
+            if (msg.path) {
+              hoverImagePathsRef.current = [
+                msg.path,
+                ...hoverImagePathsRef.current.filter((p) => p !== msg.path),
+              ].slice(0, 50);
             }
             break;
           }
@@ -425,6 +414,12 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
               isReconnect = true;
               promptSent = true;
               hideOverlay();
+              // The PTY may have been started at another size (e.g. from the
+              // phone view); claim this terminal's size.
+              try {
+                const dims = fit.proposeDimensions();
+                if (dims && !isTouchDevice()) ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
+              } catch { /* ignore */ }
               if (promptFallbackTimer) {
                 clearTimeout(promptFallbackTimer);
                 promptFallbackTimer = null;
@@ -514,7 +509,9 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       try {
         fit.fit();
         const dims = fit.proposeDimensions();
-        if (dims && ws.readyState === WebSocket.OPEN) {
+        // Touch devices never resize the shared PTY: their page height changes
+        // whenever the browser bar hides, which squeezed the desktop's session.
+        if (dims && ws.readyState === WebSocket.OPEN && !isTouchDevice()) {
           ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
         }
       } catch { /* ignore */ }
@@ -634,6 +631,26 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
     if (e.currentTarget === e.target) setIsDragOver(false);
   }
 
+  // Show a floating preview while the mouse is over a line naming an image
+  // file the CLI read (e.g. "Read(C:\...\shot.png)").
+  function handleHoverMove(e: React.MouseEvent<HTMLDivElement>) {
+    const term = termRef.current;
+    const paths = hoverImagePathsRef.current;
+    const cell = term && paths.length > 0 ? pixelToBufferCell(term, { clientX: e.clientX, clientY: e.clientY }) : null;
+    const line = term && cell ? (term.buffer.active.getLine(cell.y)?.translateToString(true) ?? '').toLowerCase() : '';
+    const hit = line
+      ? paths.find((p) => {
+          const name = p.split(/[\\/]/).pop()?.toLowerCase();
+          return !!name && line.includes(name);
+        })
+      : undefined;
+    if (!hit) {
+      if (hoverImage) setHoverImage(null);
+      return;
+    }
+    setHoverImage({ path: hit, x: e.clientX, y: e.clientY });
+  }
+
   async function handleTerminalClick(e: React.MouseEvent<HTMLDivElement>) {
     const term = termRef.current;
     const imageLookup = imageRef.current;
@@ -717,6 +734,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       onDragLeave={handleDragLeave}
       onDrop={(e) => { void handleDrop(e); }}
       onClick={(e) => { void handleTerminalClick(e); }}
+      onMouseMove={handleHoverMove}
+      onMouseLeave={() => setHoverImage(null)}
     >
       {/*
         xterm.js paints its own background color; we always want the wrapper
@@ -810,6 +829,21 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
           <span className="rounded-md bg-zinc-900/90 px-3 py-1.5 text-sm text-zinc-100 shadow-lg">
             Drop file to upload &nbsp;·&nbsp; hold <kbd className="rounded bg-zinc-700 px-1 text-[10px]">Shift</kbd> for image prompt
           </span>
+        </div>
+      )}
+      {hoverImage && (
+        <div
+          className="pointer-events-none fixed z-50 rounded-md border border-border bg-zinc-900/95 p-1 shadow-2xl"
+          style={{
+            left: Math.min(hoverImage.x + 16, window.innerWidth - 496),
+            top: Math.min(hoverImage.y + 16, window.innerHeight - 376),
+          }}
+        >
+          <img
+            src={`${API_BASE}/api/file-preview?path=${encodeURIComponent(hoverImage.path)}`}
+            alt=""
+            className="block max-h-[360px] max-w-[480px] object-contain"
+          />
         </div>
       )}
       {expandedImage && (

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Columns2, LayoutGrid, ListTodo, MessageSquare, Terminal, FileText, Star, StarOff, Timer, Edit3, ArrowRightLeft, Eye, EyeOff, PanelRightOpen, PanelRightClose, Share2, Maximize2, Minimize2 } from 'lucide-react';
+import { Columns2, LayoutGrid, ListTodo, MessageSquare, Terminal, FileText, Star, StarOff, Timer, Edit3, ArrowRightLeft, Eye, EyeOff, PanelRightOpen, PanelRightClose, Share2, Maximize2, Minimize2, FileDiff } from 'lucide-react';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle, type Layout, type GroupImperativeHandle } from 'react-resizable-panels';
 import PathInsertMenu from '@/components/shared/PathInsertMenu';
 import RequiredSkillsBanner from '@/components/skills/RequiredSkillsBanner';
@@ -12,6 +12,8 @@ import TerminalView, { type TerminalViewHandle } from './TerminalView';
 import TaskQueuePanel from './TaskQueuePanel';
 import LiveLoopsPanel from './LiveLoopsPanel';
 import TranscriptViewer from './TranscriptViewer';
+import MobileSessionView from './MobileSessionView';
+import { isTouchDevice } from '@/lib/device';
 import PersonaSelector from './PersonaSelector';
 import ConsultPanel from './ConsultPanel';
 import HandoffDialog from './HandoffDialog';
@@ -29,6 +31,7 @@ export default function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const [touchDevice] = useState(isTouchDevice);
   const [showQueue, setShowQueue] = useState(false);
   const [showLoops, setShowLoops] = useState(false);
   const [viewMode, setViewMode] = useState<'terminal' | 'transcript'>('terminal');
@@ -484,6 +487,32 @@ export default function SessionDetailPage() {
     } catch { /* ignore */ }
   }
 
+  // Phones get their own view: conversation + input, never the terminal.
+  if (touchDevice && sessionId) {
+    if (sessionLookupState === 'not-found' && !isNewSession) {
+      return (
+        <div className="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+          This session is no longer available.
+        </div>
+      );
+    }
+    if (terminalArgs === null) {
+      return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading…</div>;
+    }
+    return (
+      <MobileSessionView
+        sessionId={sessionId}
+        title={session ? shortProject(session.project) : undefined}
+        cwd={cwd}
+        projectDir={session?.projectDir}
+        command={handoff?.command ?? terminalCommand}
+        args={handoff?.args ?? (terminalArgs.length > 0 ? terminalArgs : undefined)}
+        provider={handoff?.provider ?? currentProvider}
+        account={activeAccount}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col h-full bg-background">
       <RequiredSkillsBanner sessionId={sessionId} cwd={cwd} />
@@ -586,6 +615,23 @@ export default function SessionDetailPage() {
               data-track-category="action"
             >
               {tuiFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </Button>
+          )}
+
+          {(handoff?.provider ?? session?.provider ?? currentProvider) === 'claude' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (viewMode !== 'terminal') setViewMode('terminal');
+                sendTerminalInputWhenReady('/diff');
+              }}
+              className="gap-1 text-muted-foreground hover:text-foreground hover:bg-accent"
+              title="Show or hide Claude Code's diff panel (sends /diff). Claude Code remembers the choice."
+              data-track="session_detail.toggle_diff_panel"
+              data-track-category="action"
+            >
+              <FileDiff className="h-4 w-4" />
             </Button>
           )}
 

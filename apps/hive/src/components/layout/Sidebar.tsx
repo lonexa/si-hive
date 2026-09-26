@@ -1,3 +1,4 @@
+import { isTouchDevice } from '@/lib/device';
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
@@ -17,7 +18,8 @@ import { NAV_SECTIONS, findNavItem, applyOrder, type NavItem } from './nav-confi
 const UPDATE_CHECK_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 export default function Sidebar() {
-  const [collapsed, setCollapsed] = useState(false);
+  // Start collapsed on phones and narrow screens so the page gets the width.
+  const [collapsed, setCollapsed] = useState(() => isTouchDevice() || window.matchMedia('(max-width: 768px)').matches);
   const connected = useDashboardStore((s) => s.connected);
   const sessions = useDashboardStore((s) => s.sessions);
   const theme = useDashboardStore((s) => s.theme);
@@ -121,7 +123,7 @@ export default function Sidebar() {
     <TooltipProvider delayDuration={0}>
       <aside
         className={cn(
-          'flex flex-col border-r border-border bg-sidebar h-screen transition-all duration-200',
+          'flex flex-col border-r border-border bg-sidebar h-dvh transition-all duration-200',
           collapsed ? 'w-16' : 'w-56'
         )}
       >
