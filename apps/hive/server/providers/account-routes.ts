@@ -19,6 +19,7 @@ import path from 'node:path';
 import type Database from 'better-sqlite3';
 import { sendJson, readBody } from '../../../../packages/shared/src/server/http-utils.js';
 import type { AuthenticatedRequest } from '../auth/types.js';
+import { isAuthEnabled } from '../auth/settings.js';
 import type { HiveConfig } from '../types.js';
 import { loadConfig, saveConfig } from '../config.js';
 import { spawnPty, destroyPty } from '../terminal-pty.js';
@@ -62,14 +63,22 @@ function isActualAdmin(db: Database.Database, oid: string | undefined): boolean 
   return row?.role === 'admin';
 }
 
-function requireAdmin(req: AuthenticatedRequest, res: http.ServerResponse, db: Database.Database): boolean {
+export function requireAdmin(req: AuthenticatedRequest, res: http.ServerResponse, db: Database.Database): boolean {
+  // Login off: every request is this machine's own user, who is admin (see
+  // localUser). That user has no row in `users`, so the DB check would refuse it.
+  if (!isAuthEnabled(loadConfig())) return true;
   if (isActualAdmin(db, req.user?.oid)) return true;
   sendJson(res, 403, { error: 'Admin role required to manage AI provider accounts' });
   return false;
 }
 
-/** Persist an accounts list for a provider, preserving the rest of the config. */
+/**
+ * Persist an accounts list for a provider, preserving the rest of the config.
+ * The server's in-memory config gets the same aiProviders: /api/config reads it,
+ * and a later settings save writes it back whole, which would otherwise undo this.
+ */
 function writeAccounts(
+  liveConfig: HiveConfig | undefined,
   providerId: ProviderId,
   mutate: (accounts: AccountConfig[]) => AccountConfig[],
   defaultAccount?: string,
@@ -86,6 +95,7 @@ function writeAccounts(
   };
   const updated: HiveConfig = { ...cfg, aiProviders: { ...aiProviders, providers } };
   saveConfig(updated);
+  if (liveConfig) liveConfig.aiProviders = updated.aiProviders;
   return updated;
 }
 
@@ -94,6 +104,7 @@ export function registerAccountRoutes(
   req: AuthenticatedRequest,
   res: http.ServerResponse,
   db: Database.Database,
+  liveConfig?: HiveConfig,
 ): boolean {
   const m = url.pathname.match(/^\/api\/providers\/([a-z]+)\/accounts(?:\/([a-z0-9-]+))?(?:\/([a-z-]+))?$/);
   if (!m) return false;
@@ -154,7 +165,7 @@ export function registerAccountRoutes(
         return;
       }
 
-      writeAccounts(providerId, (accts) => [...accts, { id, label: label || id, configDir }]);
+      writeAccounts(liveConfig, providerId, (accts) => [...accts, { id, label: label || id, configDir }]);
       sendJson(res, 200, {
         ok: true,
         account: { id, label: label || id, configDir, authenticated: false, isDefault: false },
@@ -246,13 +257,14 @@ export function registerAccountRoutes(
   if (req.method === 'POST' && action === 'set-default') {
     if (!requireAdmin(req, res, db)) return true;
     const config = loadConfig();
+    // Any listed identity can be preselected, including a local model endpoint.
     const known = accountId === DEFAULT_ACCOUNT_ID
-      || (config.aiProviders?.providers?.[providerId]?.accounts ?? []).some((a) => a.id === accountId);
+      || listAccounts(config, providerId).some((a) => a.id === accountId);
     if (!known) {
       sendJson(res, 404, { error: `No such account: ${accountId}` });
       return true;
     }
-    writeAccounts(providerId, (accts) => accts, accountId);
+    writeAccounts(liveConfig, providerId, (accts) => accts, accountId);
     sendJson(res, 200, { ok: true, defaultAccount: accountId });
     return true;
   }
@@ -282,6 +294,7 @@ export function registerAccountRoutes(
     }
     const stillDefault = config.aiProviders?.providers?.[providerId]?.defaultAccount === accountId;
     writeAccounts(
+      liveConfig,
       providerId,
       (accts) => accts.filter((a) => a.id !== accountId),
       stillDefault ? DEFAULT_ACCOUNT_ID : undefined,

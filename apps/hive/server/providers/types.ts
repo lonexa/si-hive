@@ -122,4 +122,13 @@ export interface AccountStatus {
   email?: string;
   orgName?: string;
   subscriptionType?: string;
+  /**
+   * 'local' = a local model endpoint (id `local-<id>`): same CLI and default
+   * config dir, redirected to a model server on this machine.
+   */
+  kind?: 'account' | 'local';
+  /** Local endpoints only: the model the session runs on. */
+  model?: string;
+  /** Local endpoints only: the server root. */
+  baseUrl?: string;
 }

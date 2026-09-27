@@ -21,7 +21,7 @@ import { useIncognito } from '@/hooks/useIncognito';
 import SessionSidebar, { readSidebarState, writeSidebarState } from './SessionSidebar';
 import SessionModelMenu from './SessionModelMenu';
 import SessionAccountMenu from './SessionAccountMenu';
-import { getLaunchFlags, getPrimaryProviderId, getProviderStatus, PROVIDER_SHORT_NAMES, buildResumeArgs, buildProviderArgs, buildProviderFlags, formatModelDisplay, buildModelSwitchInput, getSelectableAccounts } from '@/lib/launch-flags';
+import { getLaunchFlags, getPrimaryProviderId, getProviderStatus, PROVIDER_SHORT_NAMES, buildResumeArgs, buildProviderArgs, buildProviderFlags, formatModelDisplay, buildModelSwitchInput, getSelectableAccounts, isLocalAccountId } from '@/lib/launch-flags';
 import type { CodexReasoningEffort, ProviderId, ProviderStatus } from '@/lib/launch-flags';
 import { saveSessionIntent, readSessionIntent, migrateSessionIntent } from '@/lib/session-intent';
 
@@ -116,12 +116,19 @@ export default function SessionDetailPage() {
   // only trustworthy answer to "which account is this session billing?".
   const [resolvedAccount, setResolvedAccount] = useState<string | undefined>(undefined);
   useEffect(() => { setActiveAccount(launchAccountId); }, [launchAccountId, sessionId]);
+  const runningAccountId = resolvedAccount ?? activeAccount;
 
   const sessions = useDashboardStore((s) => s.sessions);
   const queueData = useDashboardStore((s) => sessionId ? s.queues[sessionId] : undefined);
   const allLiveLoops = useDashboardStore((s) => s.liveLoops);
   const sessionLoops = allLiveLoops.filter((l) => l.sessionId === sessionId);
   const session = sessions.find((s) => s.id === sessionId);
+  // A local model endpoint pins the model, so the header shows it instead of
+  // offering Anthropic models.
+  const runningLocalModel = isLocalAccountId(runningAccountId)
+    ? getSelectableAccounts(handoff?.provider ?? session?.provider ?? currentProvider, providerStatuses)
+      .find((a) => a.id === runningAccountId)?.model ?? 'Local model'
+    : undefined;
 
   // Server-resolved cwd for sessions not in the in-memory dashboard store.
   // Without this, claude --resume runs from the wrong directory and Claude
@@ -590,6 +597,7 @@ export default function SessionDetailPage() {
             providerStatuses={providerStatuses}
             currentModel={activeModel}
             onModelSelect={handleModelChange}
+            localModel={runningLocalModel}
           />
 
           {/* Only for a real resumable session — a temp `new-*`/`handoff-*` id

@@ -44,6 +44,7 @@ import { registerSharingRoutes } from './sharing/routes.js';
 import { registerHooksRoutes } from './hooks/routes.js';
 import { registerSkillRequirementsRoutes } from './skills/requirements-routes.js';
 import { registerAccountRoutes } from './providers/account-routes.js';
+import { registerLocalModelRoutes } from './local-models/routes.js';
 import { registerCalendarRoutes } from './dashboard/calendar-routes.js';
 import { handleGmailRoutes } from './gmail/routes.js';
 import { registerReplayRoutes } from './sessions/replay-routes.js';
@@ -1399,8 +1400,15 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   // --- AI provider account routes (list is open; mutations are admin-only) ---
   if (/^\/api\/providers\/[a-z]+\/accounts/.test(url.pathname)) {
-    if (registerAccountRoutes(url, req, res, db)) return;
+    if (registerAccountRoutes(url, req, res, db, config)) return;
     jsonResponse(res, 404, { error: 'Account route not found' });
+    return;
+  }
+
+  // --- Local model endpoints (list is open; mutations and probes are admin-only) ---
+  if (url.pathname === '/api/local-models' || url.pathname.startsWith('/api/local-models/')) {
+    if (registerLocalModelRoutes(url, req, res, db, config)) return;
+    jsonResponse(res, 404, { error: 'Local model route not found' });
     return;
   }
 

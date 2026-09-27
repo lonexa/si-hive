@@ -7,6 +7,6 @@ export {
   FALLBACK_PROVIDER_MODELS, getProviderModels, buildModelSwitchInput,
   DEFAULT_CODEX_MODEL, DEFAULT_CODEX_REASONING_EFFORT, CODEX_REASONING_EFFORTS,
   getDefaultCodexReasoningEffort,
-  DEFAULT_ACCOUNT_ID, getSelectableAccounts, getDefaultAccountId,
+  DEFAULT_ACCOUNT_ID, getSelectableAccounts, getDefaultAccountId, isLocalAccountId,
 } from '@hive/shared/lib/launch-flags';
 export type { CodexReasoningEffort, LaunchFlags, ProviderId, ProviderStatus, ProviderModel, AccountStatus } from '@hive/shared/lib/launch-flags';

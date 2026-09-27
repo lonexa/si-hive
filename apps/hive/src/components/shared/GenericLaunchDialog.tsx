@@ -72,6 +72,7 @@ export default function GenericLaunchDialog({
   // Only accounts that can actually be launched (default + authenticated ones).
   // With one account the row is hidden entirely — identical to the pre-accounts UI.
   const accounts = getSelectableAccounts(selectedProvider, providers);
+  const selectedLocal = accounts.find((a) => a.id === selectedAccount && a.kind === 'local');
 
   // Account ids are provider-scoped, so reset when the provider changes.
   useEffect(() => {
@@ -139,7 +140,7 @@ export default function GenericLaunchDialog({
 
             {accounts.length > 1 && (
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-foreground">Account</label>
+                <label className="text-xs font-medium text-foreground">Runs on</label>
                 <div>
                   <AccountPicker
                     value={selectedAccount}
@@ -149,8 +150,9 @@ export default function GenericLaunchDialog({
                   />
                 </div>
                 <p className="text-[11px] text-muted-foreground">
-                  Same skills, agents and session history either way — only the
-                  subscription being billed changes.
+                  {selectedLocal
+                    ? `Claude Code on ${selectedLocal.model} at ${selectedLocal.baseUrl}. Same skills, agents and session history.`
+                    : 'Same skills, agents and session history either way — only the subscription being billed changes.'}
                 </p>
               </div>
             )}

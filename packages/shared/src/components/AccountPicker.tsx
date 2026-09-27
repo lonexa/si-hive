@@ -49,6 +49,7 @@ export default function AccountPicker({
   if (accounts.length < 2) return null;
 
   const current = accounts.find((a) => a.id === value) ?? accounts[0];
+  const isLocal = current?.kind === 'local';
   const isSm = size === 'sm';
   const btnPadding = isSm ? 'px-2 py-0.5 text-xs' : 'px-3 py-1.5 text-sm';
 
@@ -60,10 +61,17 @@ export default function AccountPicker({
         className={`inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800
           text-zinc-100 hover:bg-zinc-700 transition-colors ${btnPadding}`}
       >
-        <span className="font-mono text-[10px] leading-none rounded bg-zinc-700 px-1 py-0.5 text-zinc-300">
-          {(current?.label ?? '?').slice(0, 2).toUpperCase()}
+        <span
+          className={`font-mono text-[10px] leading-none rounded px-1 py-0.5 ${
+            isLocal ? 'bg-amber-500/20 text-amber-300' : 'bg-zinc-700 text-zinc-300'
+          }`}
+        >
+          {isLocal ? 'LOCAL' : (current?.label ?? '?').slice(0, 2).toUpperCase()}
         </span>
         <span>{current?.label ?? value}</span>
+        {isLocal && current?.model && (
+          <span className="max-w-[160px] truncate text-zinc-400">{current.model}</span>
+        )}
         <svg
           className={`h-3 w-3 text-zinc-400 transition-transform ${open ? 'rotate-180' : ''}`}
           viewBox="0 0 20 20"
@@ -82,27 +90,41 @@ export default function AccountPicker({
           className="absolute left-0 z-50 mt-1 min-w-[200px] rounded-md border border-zinc-700
             bg-zinc-800 py-1 shadow-lg"
         >
-          {accounts.map((account) => {
+          {accounts.map((account, i) => {
             const isActive = account.id === value;
+            const local = account.kind === 'local';
+            // Local models sit after the real logins, under their own heading.
+            const firstLocal = local && accounts[i - 1]?.kind !== 'local';
             return (
-              <button
-                key={account.id}
-                type="button"
-                onClick={() => {
-                  onChange(account.id);
-                  setOpen(false);
-                }}
-                className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-sm transition-colors
-                  ${isActive
-                    ? 'bg-zinc-700 text-zinc-100'
-                    : 'text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100'
-                  }`}
-              >
-                <span className="truncate">{account.label}</span>
-                {account.isDefault && (
-                  <span className="text-[10px] uppercase tracking-wide text-zinc-500">primary</span>
+              <div key={account.id}>
+                {firstLocal && (
+                  <div className="mt-1 border-t border-zinc-700 px-3 pb-0.5 pt-1.5 text-[10px] uppercase tracking-wide text-zinc-500">
+                    Local models
+                  </div>
                 )}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange(account.id);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-sm transition-colors
+                    ${isActive
+                      ? 'bg-zinc-700 text-zinc-100'
+                      : 'text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100'
+                    }`}
+                >
+                  <span className="min-w-0 text-left">
+                    <span className="block truncate">{account.label}</span>
+                    {local && account.model && (
+                      <span className="block truncate text-[11px] text-zinc-500">{account.model}</span>
+                    )}
+                  </span>
+                  {account.isDefault && (
+                    <span className="text-[10px] uppercase tracking-wide text-zinc-500">primary</span>
+                  )}
+                </button>
+              </div>
             );
           })}
         </div>

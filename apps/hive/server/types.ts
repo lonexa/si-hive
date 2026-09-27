@@ -180,6 +180,8 @@ export interface HiveConfig {
   sharingDrivePath?: string;
   launchFlags?: LaunchFlags;
   aiProviders?: ProvidersConfig;
+  /** Local model servers Claude Code sessions can run on (see local-models/). */
+  localModels?: import('./local-models/endpoints.js').LocalModelsConfig;
   // Lite fields (merged)
   google?: GoogleOAuthConfig;
   gmail?: GmailTokenConfig;

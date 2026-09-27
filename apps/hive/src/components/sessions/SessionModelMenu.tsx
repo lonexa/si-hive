@@ -1,4 +1,4 @@
-import { Bot, Check, ChevronDown } from 'lucide-react';
+import { Bot, Check, ChevronDown, Cpu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -22,6 +22,11 @@ interface SessionModelMenuProps {
   providerStatuses: ProviderStatus[];
   currentModel?: string;
   onModelSelect: (modelId: string) => void;
+  /**
+   * Set when the session runs on a local model endpoint. The model is pinned by
+   * the endpoint, so the Anthropic model list does not apply — show it read-only.
+   */
+  localModel?: string;
 }
 
 export default function SessionModelMenu({
@@ -29,7 +34,26 @@ export default function SessionModelMenu({
   providerStatuses,
   currentModel,
   onModelSelect,
+  localModel,
 }: SessionModelMenuProps) {
+  if (localModel) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled
+        className="gap-1.5 text-muted-foreground disabled:opacity-100"
+        title="This session runs on a local model. Switch it from the account menu."
+      >
+        <Cpu className="h-4 w-4" />
+        <span className="max-w-40 truncate">{localModel}</span>
+        <span className="font-mono text-[9px] leading-none rounded bg-amber-500/20 text-amber-300 px-1 py-0.5">
+          LOCAL
+        </span>
+      </Button>
+    );
+  }
+
   const models = getProviderModels(provider, providerStatuses);
   const activeModel = models.find((model) => model.id === currentModel);
   const label = activeModel?.displayName

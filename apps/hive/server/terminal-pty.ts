@@ -20,6 +20,12 @@ import type WebSocket from 'ws';
 import type { ProviderId } from './types.js';
 import { getProvider } from './providers/registry.js';
 import { resolveAccountConfigDir } from './providers/accounts.js';
+import {
+  buildLocalEnv,
+  getEndpointForAccount,
+  withLocalModelArg,
+  type LocalModelEndpoint,
+} from './local-models/endpoints.js';
 import { loadConfig } from './config.js';
 import type { ProvidersConfig } from './providers/types.js';
 import {
@@ -275,6 +281,18 @@ export async function spawnPty(
   // swapped for the provider CLI below, which rejects it.
   let shellArgs = args ?? (isWindows && !command && !providerId ? ['-NoLogo'] : []);
 
+  // A local model endpoint: pin the CLI to its model before the args are
+  // wrapped for cmd.exe below. Any --model from the UI is an Anthropic name.
+  let localEndpoint: LocalModelEndpoint | null = null;
+  try {
+    localEndpoint = getEndpointForAccount(loadConfig(), providerId, accountId);
+  } catch (err) {
+    console.warn(`[pty] Local model lookup failed, using default account:`, (err as Error).message);
+  }
+  if (localEndpoint) {
+    shellArgs = withLocalModelArg(shellArgs, localEndpoint.model);
+  }
+
   // Guard: if command was empty string, fall back to default shell
   if (!shell) {
     console.warn(`[pty] Received empty command, falling back to default shell`);
@@ -352,6 +370,12 @@ export async function spawnPty(
     env = provider.cleanEnv(env, { configDir: accountConfigDir }) as Record<string, string>;
     if (accountConfigDir) {
       console.log(`[pty] ${providerId} session using account "${accountId}" (${accountConfigDir})`);
+    }
+    if (localEndpoint) {
+      // A stray API key would outrank the auth token and send it to Anthropic.
+      delete env.ANTHROPIC_API_KEY;
+      Object.assign(env, buildLocalEnv(localEndpoint));
+      console.log(`[pty] ${providerId} session using local model "${localEndpoint.model}" at ${localEndpoint.baseUrl}`);
     }
   } else {
     // Default: strip CLAUDE* env vars for backward compatibility

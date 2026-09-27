@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import TerminalView, { type TerminalViewHandle } from '@/components/sessions/TerminalView';
 import { invalidateLaunchFlagsCache } from '@/lib/launch-flags';
 import { extractLoginUrl } from '@/lib/login-url';
+import LocalModelsSection from './LocalModelsSection';
 import { ExternalLink, Copy } from 'lucide-react';
 import type { ProviderId, AccountStatus } from '@/lib/launch-flags';
 
@@ -280,7 +281,8 @@ export default function AiAccountsPage() {
 
       {/* --- Existing accounts --- */}
       <div className="space-y-2">
-        {(data?.accounts ?? []).map((account) => (
+        {/* Local model endpoints come back in this list too; they get their own section. */}
+        {(data?.accounts ?? []).filter((a) => a.kind !== 'local').map((account) => (
           <div
             key={account.id}
             className="flex items-center justify-between gap-3 rounded-md border border-border bg-card p-3"
@@ -491,6 +493,10 @@ export default function AiAccountsPage() {
           </div>
         </div>
       )}
+
+      <div className="border-t border-border pt-6">
+        <LocalModelsSection onSetDefault={handleSetDefault} onChanged={() => void fetchAccounts()} />
+      </div>
     </div>
   );
 }

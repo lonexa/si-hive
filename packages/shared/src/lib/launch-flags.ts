@@ -28,6 +28,17 @@ export interface AccountStatus {
   email?: string;
   orgName?: string;
   subscriptionType?: string;
+  /** 'local' = a local model endpoint (id `local-<id>`), not a login. */
+  kind?: 'account' | 'local';
+  /** Local endpoints only: the model the session runs on. */
+  model?: string;
+  /** Local endpoints only: the server root. */
+  baseUrl?: string;
+}
+
+/** True for a local model endpoint's account id (`local-<id>`). */
+export function isLocalAccountId(accountId: string | undefined): boolean {
+  return !!accountId && accountId.startsWith('local-');
 }
 
 /**

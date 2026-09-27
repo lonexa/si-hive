@@ -24,6 +24,13 @@ import { execFileSync } from 'node:child_process';
 import { isWindows } from '../platform.js';
 import { getProvider } from './registry.js';
 import type { ProviderId, AccountConfig, AccountStatus, ProvidersConfig } from './types.js';
+import {
+  LOCAL_MODEL_PROVIDER,
+  isLocalAccountId,
+  listEndpoints,
+  localAccountId,
+  type LocalModelsConfig,
+} from '../local-models/endpoints.js';
 
 /** Reserved id of the implicit account backed by the provider's own homeDir(). */
 export const DEFAULT_ACCOUNT_ID = 'default';
@@ -143,9 +150,12 @@ export function supportsAccounts(providerId: ProviderId): boolean {
   return MULTI_ACCOUNT_PROVIDERS.has(providerId);
 }
 
-/** Account ids are used as directory-name suffixes — keep them boring. */
+/**
+ * Account ids are used as directory-name suffixes — keep them boring. The
+ * `local-` prefix is reserved for local model endpoints (see local-models/).
+ */
 export function isValidAccountId(id: string): boolean {
-  return /^[a-z0-9][a-z0-9-]{0,30}$/.test(id) && id !== DEFAULT_ACCOUNT_ID;
+  return /^[a-z0-9][a-z0-9-]{0,30}$/.test(id) && id !== DEFAULT_ACCOUNT_ID && !isLocalAccountId(id);
 }
 
 /**
@@ -279,7 +289,7 @@ export function isAuthenticated(configDir: string): boolean {
  * about accounts see exactly the pre-existing single-identity behaviour.
  */
 export function listAccounts(
-  config: { aiProviders?: ProvidersConfig; claudeHome?: string },
+  config: { aiProviders?: ProvidersConfig; claudeHome?: string; localModels?: LocalModelsConfig },
   providerId: ProviderId,
 ): AccountStatus[] {
   let primaryHome: string | null = null;
@@ -293,6 +303,7 @@ export function listAccounts(
     configDir: primaryHome,
     authenticated: primaryHome ? isAuthenticated(primaryHome) : false,
     isDefault: true,
+    kind: 'account',
   }];
 
   for (const acct of configuredAccounts(config, providerId)) {
@@ -303,18 +314,41 @@ export function listAccounts(
       configDir: dir,
       authenticated: isAuthenticated(dir),
       isDefault: false,
+      kind: 'account',
     });
+  }
+
+  // Local model endpoints ride along as extra identities: same CLI and default
+  // config dir, but the session's environment points it at the local server.
+  if (providerId === LOCAL_MODEL_PROVIDER) {
+    for (const ep of listEndpoints(config)) {
+      accounts.push({
+        id: localAccountId(ep.id),
+        label: ep.label,
+        configDir: null,
+        authenticated: true,
+        isDefault: false,
+        kind: 'local',
+        model: ep.model,
+        baseUrl: ep.baseUrl,
+      });
+    }
   }
   return accounts;
 }
 
 /** Account id to preselect, falling back to default when the stored one is gone. */
 export function defaultAccountId(
-  config: { aiProviders?: ProvidersConfig },
+  config: { aiProviders?: ProvidersConfig; localModels?: LocalModelsConfig },
   providerId: ProviderId,
 ): string {
   const stored = providersConfigOf(config).providers?.[providerId]?.defaultAccount;
   if (!stored || stored === DEFAULT_ACCOUNT_ID) return DEFAULT_ACCOUNT_ID;
+  if (isLocalAccountId(stored)) {
+    const local = providerId === LOCAL_MODEL_PROVIDER
+      && listEndpoints(config).some((e) => localAccountId(e.id) === stored);
+    return local ? stored : DEFAULT_ACCOUNT_ID;
+  }
   const exists = configuredAccounts(config, providerId).some((a) => a.id === stored);
   return exists ? stored : DEFAULT_ACCOUNT_ID;
 }
@@ -334,6 +368,9 @@ export function resolveAccountConfigDir(
 ): string | undefined {
   if (!accountId || accountId === DEFAULT_ACCOUNT_ID) return undefined;
   if (!supportsAccounts(providerId)) return undefined;
+  // Local model sessions run on the default config dir; their difference is
+  // purely environment (see local-models/endpoints.ts → buildLocalEnv).
+  if (isLocalAccountId(accountId)) return undefined;
 
   const acct = configuredAccounts(config, providerId).find((a) => a.id === accountId);
   if (!acct) {
