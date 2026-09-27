@@ -1,6 +1,4 @@
-import { RouterProvider } from 'react-router-dom';
 import { Toaster } from 'sonner';
-import { router } from './router';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useNotifications } from '@/hooks/useNotifications';
 import { useMessagesPoll } from '@/hooks/useMessagesPoll';
@@ -10,8 +8,15 @@ import { TrackingRoot } from '@/components/TrackingRoot';
 import { AuthProvider, useAuth } from '@/auth/AuthProvider';
 import LoginPage from '@/auth/LoginPage';
 import SetupWizard from '@/components/setup/SetupWizard';
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { API_BASE } from '@/lib/api-config';
+import { IS_MOBILE_VIEW } from '@/lib/device';
+
+// Phones get a separate UI (own router, layout and pages); only the one in
+// use is loaded.
+const AppRoutes = IS_MOBILE_VIEW
+  ? lazy(() => import('@/mobile/MobileRoot'))
+  : lazy(() => import('./DesktopRoot'));
 
 function Initializers() {
   useWebSocket();
@@ -63,7 +68,9 @@ function AuthGate() {
       <Initializers />
       <ThemedToaster />
       <TrackingRoot>
-        <RouterProvider router={router} />
+        <Suspense fallback={null}>
+          <AppRoutes />
+        </Suspense>
       </TrackingRoot>
     </>
   );
@@ -82,7 +89,7 @@ function ThemedToaster() {
   return (
     <Toaster
       theme={theme}
-      position="top-right"
+      position={IS_MOBILE_VIEW ? 'top-center' : 'top-right'}
       closeButton
       toastOptions={{
         style: {

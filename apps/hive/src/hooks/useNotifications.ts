@@ -2,7 +2,7 @@ import { useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useDashboardStore } from '@/stores/dashboard-store';
 import { getSessionDisplayName, shortProject } from '@/lib/utils';
-import { router } from '@/router';
+import { appNavigate } from '@/lib/app-navigate';
 
 const DEDUP_WINDOW_MS = 30_000;
 const MACOS_SUPPRESS_WINDOW_MS = 5_000;
@@ -38,7 +38,7 @@ function statusToastType(status: string): 'success' | 'warning' | 'error' | 'inf
 }
 
 function navigateToSession(sessionId: string) {
-  router.navigate(`/sessions/${sessionId}`);
+  appNavigate(`/sessions/${sessionId}`);
 }
 
 function fireToastAndBrowserNotification(

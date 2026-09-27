@@ -232,7 +232,7 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
     // Full-screen over the app chrome: every pixel matters on a phone.
     <div className="fixed inset-0 z-40 flex h-dvh flex-col bg-background">
       <div className="shrink-0 flex items-center gap-2 border-b border-border px-2 py-1.5 bg-card">
-        <Button variant="ghost" size="sm" className="h-9 w-9 p-0" onClick={() => navigate('/sessions')} aria-label="Back to sessions">
+        <Button variant="ghost" size="sm" className="h-9 w-9 p-0" onClick={() => ((window.history.state as { idx?: number } | null)?.idx ? navigate(-1) : navigate('/sessions'))} aria-label="Back">
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{title || sessionId.slice(0, 8)}</div>

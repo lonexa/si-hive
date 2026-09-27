@@ -1,0 +1,137 @@
+/*
+ * Phone UI styles. Loaded only in the mobile UI (MobileRoot adds
+ * html.hive-mobile). Desktop pages shown inside the phone shell are wrapped in
+ * .mobile-compat, which tames their wide parts here instead of in each page.
+ */
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+html.hive-mobile,
+html.hive-mobile body {
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* iOS zooms the page in when a focused field's text is smaller than 16px. */
+html.hive-mobile input:not([type='checkbox']):not([type='radio']):not([type='range']),
+html.hive-mobile textarea,
+html.hive-mobile select {
+  font-size: 16px;
+}
+
+/* Dialogs, sheets and popovers fit the screen and scroll inside. */
+html.hive-mobile [role='dialog'],
+html.hive-mobile [role='alertdialog'] {
+  max-width: calc(100vw - 16px) !important;
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Floating widgets sit above the bottom tab bar. */
+.mobile-lift > .fixed {
+  bottom: calc(4.25rem + env(safe-area-inset-bottom)) !important;
+}
+
+/* Chat: the conversation list fills the screen. */
+.mobile-chat-list > * {
+  width: 100% !important;
+  border-right: 0 !important;
+}
+
+/* ---- Desktop pages inside the phone shell ---- */
+
+.mobile-compat {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Tab strips: one swipeable row instead of spilling off the right edge. */
+.mobile-compat [role='tablist'] {
+  display: flex !important;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  min-height: 2.5rem;
+  justify-content: flex-start;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mobile-compat [role='tablist']::-webkit-scrollbar {
+  display: none;
+}
+.mobile-compat [role='tablist'] > * {
+  flex-shrink: 0;
+}
+
+/* Toolbars and header rows wrap onto a second line rather than overflow. */
+.mobile-compat .flex:not(.flex-col):not(.flex-nowrap):not([role='tablist']):not(button):not(a):not(label) {
+  flex-wrap: wrap;
+}
+.mobile-compat .inline-flex:not(button):not(a):not([role='tablist']) {
+  flex-wrap: wrap;
+}
+
+/* Nothing wider than the screen. */
+.mobile-compat div,
+.mobile-compat section,
+.mobile-compat aside,
+.mobile-compat form,
+.mobile-compat header,
+.mobile-compat nav,
+.mobile-compat input,
+.mobile-compat select,
+.mobile-compat textarea {
+  max-width: 100%;
+}
+.mobile-compat [class*='min-w-['] {
+  min-width: 0 !important;
+}
+.mobile-compat img,
+.mobile-compat video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Wide content scrolls inside its own box. */
+.mobile-compat table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.mobile-compat pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Desktop-sized page padding and headings, scaled for a phone. */
+.mobile-compat .p-6,
+.mobile-compat .p-8 {
+  padding: 0.75rem;
+}
+.mobile-compat .px-6,
+.mobile-compat .px-8 {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+.mobile-compat .py-6,
+.mobile-compat .py-8 {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+.mobile-compat h1 {
+  font-size: 1.125rem;
+  line-height: 1.5rem;
+}
+
+/* Search boxes in wrapping toolbars keep a usable width. */
+.mobile-compat .flex > :is(.flex-1, .relative):has(> input:not([type='checkbox']):not([type='radio'])) {
+  min-width: 12rem;
+  flex-grow: 1;
+}

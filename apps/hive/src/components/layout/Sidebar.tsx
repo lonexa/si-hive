@@ -1,8 +1,8 @@
-import { isTouchDevice } from '@/lib/device';
+import { isPhoneUserAgent, isTouchDevice, switchViewMode } from '@/lib/device';
 import { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
-  Settings, PanelLeftClose, PanelLeft, Sun, Moon, Plus, Star, ChevronDown, ChevronRight,
+  Settings, PanelLeftClose, PanelLeft, Sun, Moon, Plus, Star, ChevronDown, ChevronRight, Smartphone,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -205,6 +205,17 @@ export default function Sidebar() {
         {/* Footer */}
         <div className="p-3">
           <Separator className="mb-3" />
+          {/* A phone that switched to the desktop layout can switch back. */}
+          {isPhoneUserAgent() && (
+            <button
+              type="button"
+              onClick={() => switchViewMode('mobile')}
+              className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <Smartphone className="h-3.5 w-3.5" />
+              {!collapsed && 'Phone layout'}
+            </button>
+          )}
           {/* User info */}
           {authConfigured && user && !collapsed && (
             <div className="mb-2 px-1">

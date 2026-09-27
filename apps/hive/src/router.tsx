@@ -5,6 +5,7 @@ import RequireFeature from '@/auth/RequireFeature';
 import { useAuth } from '@/auth/AuthProvider';
 import { useNavStore } from '@/stores/nav-store';
 import { findNavItem } from '@/components/layout/nav-config';
+import { registerRouter } from '@/lib/app-navigate';
 
 // Lazy load pages for code splitting
 import { lazy, Suspense } from 'react';
@@ -110,3 +111,5 @@ export const router = createBrowserRouter([
     ],
   },
 ]);
+
+registerRouter(router);

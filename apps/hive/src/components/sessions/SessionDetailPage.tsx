@@ -13,7 +13,7 @@ import TaskQueuePanel from './TaskQueuePanel';
 import LiveLoopsPanel from './LiveLoopsPanel';
 import TranscriptViewer from './TranscriptViewer';
 import MobileSessionView from './MobileSessionView';
-import { isTouchDevice } from '@/lib/device';
+import { isTouchDevice, IS_MOBILE_VIEW } from '@/lib/device';
 import PersonaSelector from './PersonaSelector';
 import ConsultPanel from './ConsultPanel';
 import HandoffDialog from './HandoffDialog';
@@ -31,7 +31,8 @@ export default function SessionDetailPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const [touchDevice] = useState(isTouchDevice);
+  // Phones (and the mobile UI) get MobileSessionView instead of the terminal.
+  const [touchDevice] = useState(() => isTouchDevice() || IS_MOBILE_VIEW);
   const [showQueue, setShowQueue] = useState(false);
   const [showLoops, setShowLoops] = useState(false);
   const [viewMode, setViewMode] = useState<'terminal' | 'transcript'>('terminal');
@@ -502,7 +503,7 @@ export default function SessionDetailPage() {
     return (
       <MobileSessionView
         sessionId={sessionId}
-        title={session ? shortProject(session.project) : undefined}
+        title={session ? ((session.cwd || session.projectDir)?.split(/[\\/]/).filter(Boolean).pop() ?? shortProject(session.project)) : undefined}
         cwd={cwd}
         projectDir={session?.projectDir}
         command={handoff?.command ?? terminalCommand}
