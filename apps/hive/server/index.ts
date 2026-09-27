@@ -64,7 +64,7 @@ import { registerNowRoutes } from './now/routes.js';
 import { registerHandoffRoutes } from './handoff/routes.js';
 import { registerSearchRoutes } from './search/routes.js';
 import { registerReviewRoutes } from './reviews/routes.js';
-import { checkForUpdates, applyUpdates, getChangelog } from './updater.js';
+import { checkForUpdates, applyUpdates, getChangelog, PUBLIC_GITHUB, parseGitHubRepo } from './updater.js';
 import { getServerVersion } from './server-version.js';
 import { setDashboardWss } from './ws-presence.js';
 // Lite-merged route handlers
@@ -1247,7 +1247,15 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     }
     sharedReadBody(req).then((raw) => {
       const b = JSON.parse(raw || '{}') as { connectionId?: string; repo?: string; branch?: string };
-      const repo = b.repo?.trim();
+      let repo = b.repo?.trim();
+      if (repo && b.connectionId === PUBLIC_GITHUB) {
+        const parsed = parseGitHubRepo(repo);
+        if (!parsed) {
+          jsonResponse(res, 400, { error: 'Enter the repository as owner/name or a github.com URL' });
+          return;
+        }
+        repo = parsed;
+      }
       config.updates = repo ? { connectionId: b.connectionId || undefined, repo, branch: b.branch?.trim() || 'main' } : undefined;
       saveConfig(config);
       jsonResponse(res, 200, config.updates ?? {});

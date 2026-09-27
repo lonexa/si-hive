@@ -38,6 +38,31 @@ const STEP_LABELS: Record<string, string> = {
 
 const STEP_ORDER = ['starting', 'downloading', 'extracting', 'copying', 'versioning', 'installing', 'building', 'restarting', 'done'];
 
+const RESTART_WAIT_MS = 3 * 60_000;
+
+async function serverStartedAt(): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/health`, { cache: 'no-store' });
+    return res.ok ? ((await res.json()) as { startedAt?: string }).startedAt ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The server restarts after an update. Reload once the new process answers:
+ * reloading on a timer could land on a browser error page mid-restart.
+ */
+async function reloadWhenServerIsBack(previousStart: string | null): Promise<void> {
+  const deadline = Date.now() + RESTART_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const started = await serverStartedAt();
+    if (started && started !== previousStart) break;
+  }
+  window.location.reload();
+}
+
 export default function UpdatePage() {
   const setUpdatesAvailable = useDashboardStore((s) => s.setUpdatesAvailable);
 
@@ -104,6 +129,7 @@ export default function UpdatePage() {
     setStepDetail('Preparing update...');
     setCompletedSteps([]);
     setMessage('');
+    const previousStart = await serverStartedAt();
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -154,11 +180,11 @@ export default function UpdatePage() {
             if (data.type === 'result') {
               if (data.success) {
                 setApplyStatus('success');
-                setMessage('Update applied. Page will reload...');
+                setMessage('Update applied. The page reloads when SI Hive is back...');
                 setUpdatesAvailable(false);
                 setCompletedSteps(STEP_ORDER);
                 setCurrentStep('done');
-                setTimeout(() => window.location.reload(), 5000);
+                void reloadWhenServerIsBack(previousStart);
               } else {
                 setApplyStatus('error');
                 setMessage((data.message as string) || 'Update failed');

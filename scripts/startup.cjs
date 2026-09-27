@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Hive Startup Script — runs on Windows Service start (NSSM) or, on macOS,
- * from the LaunchAgent at login.
- * Simply starts the server. No git operations.
+ * Hive Startup Script — runs on Windows Service start (NSSM), from the Windows
+ * login entry (install-autostart-windows.cjs), or on macOS from the
+ * LaunchAgent at login.
+ * Starts the server and restarts it when it exits. No git operations.
  * Updates are handled via the "Refresh from Repo" button in the UI
  * (downloads from the update repo configured in Settings → Updates).
  *
@@ -84,13 +85,41 @@ log(`Node: ${nodeExe}`);
 log(`tsx: ${tsxCli}`);
 log(`Server: ${serverEntry}`);
 
-const child = spawn(nodeExe, [tsxCli, serverEntry], {
-  cwd: appDir,
-  stdio: 'inherit',
-  env: Object.assign({}, process.env, { HIVE_SERVICE: '1' }),
-});
+// Keep the server running. It exits on purpose to restart (after an in-app
+// update or "Restart server"), and when SI Hive runs at login nothing else
+// would bring it back. Stopping this script (service stop, Ctrl+C, signal)
+// stops the server for good.
+const QUICK_EXIT_MS = 60_000;
+const MAX_DELAY_MS = 30_000;
+let child = null;
+let stopping = false;
+let quickExits = 0;
 
-child.on('exit', (code) => {
-  log(`Server exited with code ${code}`);
-  process.exit(code ?? 1);
-});
+function start() {
+  const startedAt = Date.now();
+  child = spawn(nodeExe, [tsxCli, serverEntry], {
+    cwd: appDir,
+    stdio: 'inherit',
+    env: Object.assign({}, process.env, { HIVE_SERVICE: '1' }),
+  });
+  child.on('exit', (code, signal) => {
+    child = null;
+    log(`Server exited with code ${code}${signal ? ` (${signal})` : ''}`);
+    if (stopping) process.exit(code ?? 0);
+    // Back off if it keeps dying right after starting (port taken, bad config).
+    quickExits = Date.now() - startedAt < QUICK_EXIT_MS ? quickExits + 1 : 0;
+    const delay = Math.min(1000 * 2 ** Math.max(0, quickExits - 1), MAX_DELAY_MS);
+    log(`Restarting in ${delay / 1000}s...`);
+    setTimeout(start, delay);
+  });
+}
+
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
+  process.on(sig, () => {
+    stopping = true;
+    if (child) child.kill();
+    else process.exit(0);
+  });
+}
+
+start();

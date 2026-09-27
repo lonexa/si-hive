@@ -18,14 +18,78 @@ export type { UpdateStatus, UpdateResult, ChangelogEntry, ProgressCallback };
 
 /**
  * `config.updates`: which repo/branch this install updates from. Off unless
- * the user points it at a repo on one of their connected git hosts.
+ * the user points it at a repo — on one of their connected git hosts, or a
+ * public GitHub repo read without signing in.
  */
 export interface UpdatesConfig {
-  /** Integration connection id of the git host serving the repo. */
+  /**
+   * Integration connection id of the git host serving the repo, or
+   * PUBLIC_GITHUB to read a public GitHub repo without an integration.
+   */
   connectionId?: string;
   /** Repo full name on that host, e.g. `owner/hive`. */
   repo?: string;
   branch?: string;
+}
+
+/** `connectionId` value for a public GitHub repo (no integration, no token). */
+export const PUBLIC_GITHUB = 'github-public';
+
+/** `owner/name` from `owner/name` or a github.com URL; null if it isn't one. */
+export function parseGitHubRepo(input: string): string | null {
+  const m = input.trim().match(/^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/)?([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
+// Unauthenticated GitHub API calls are limited to 60 an hour per IP, and every
+// open SI Hive tab polls for updates, so answers are shared for a while.
+const PUBLIC_CACHE_MS = 2 * 60_000;
+const publicCache = new Map<string, { at: number; value: Promise<ChangelogEntry[]> }>();
+const GITHUB_HEADERS = {
+  Accept: 'application/vnd.github+json',
+  'X-GitHub-Api-Version': '2022-11-28',
+  'User-Agent': 'SI-Hive-Updater',
+};
+
+async function githubFetch(url: string, timeoutMs: number): Promise<Response> {
+  const res = await fetch(url, { headers: GITHUB_HEADERS, signal: AbortSignal.timeout(timeoutMs) });
+  if (res.ok) return res;
+  if ((res.status === 403 || res.status === 429) && res.headers.get('x-ratelimit-remaining') === '0') {
+    const reset = Number(res.headers.get('x-ratelimit-reset')) * 1000;
+    throw new Error(`GitHub rate limit reached — try again ${reset ? `after ${new Date(reset).toLocaleTimeString()}` : 'later'}`);
+  }
+  if (res.status === 404) throw new Error('Repository or branch not found on GitHub (is it public?)');
+  throw new Error(`GitHub returned ${res.status} ${res.statusText}`);
+}
+
+function publicGitHubSource(repo: string, branch: string): UpdateSource {
+  const listCommits = (limit: number): Promise<ChangelogEntry[]> => {
+    const key = `${repo}@${branch}#${limit}`;
+    const hit = publicCache.get(key);
+    if (hit && Date.now() - hit.at < PUBLIC_CACHE_MS) return hit.value;
+    const value = githubFetch(`https://api.github.com/repos/${repo}/commits?sha=${encodeURIComponent(branch)}&per_page=${limit}`, 30_000)
+      .then((r) => r.json() as Promise<Array<{ sha: string; commit?: { message?: string; author?: { name?: string; date?: string } } }>>)
+      .then((list) => list.map((c) => ({
+        commitId: c.sha,
+        message: c.commit?.message ?? '',
+        author: c.commit?.author?.name ?? '',
+        date: c.commit?.author?.date ?? '',
+      })));
+    publicCache.set(key, { at: Date.now(), value });
+    value.catch(() => publicCache.delete(key));
+    return value;
+  };
+  return {
+    async getLatestCommit() {
+      const [latest] = await listCommits(1);
+      return latest?.commitId ?? null;
+    },
+    listCommits,
+    async downloadArchive() {
+      const res = await githubFetch(`https://codeload.github.com/${repo}/zip/refs/heads/${encodeURIComponent(branch)}`, 600_000);
+      return Buffer.from(await res.arrayBuffer());
+    },
+  };
 }
 
 const repoDir = resolve(join(import.meta.dirname, '..', '..', '..'));
@@ -34,6 +98,10 @@ function getUpdateSource(): UpdateSource | null {
   const config = loadConfig();
   const updates = config.updates as UpdatesConfig | undefined;
   if (!updates?.repo) return null;
+  if (updates.connectionId === PUBLIC_GITHUB) {
+    const repo = parseGitHubRepo(updates.repo);
+    return repo ? publicGitHubSource(repo, updates.branch || 'main') : null;
+  }
   const host = getGitHost(config, { connectionId: updates.connectionId });
   if (!host?.downloadArchive) return null;
   const repo = updates.repo;
