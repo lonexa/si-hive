@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Columns2, LayoutGrid, ListTodo, MessageSquare, Terminal, FileText, Star, StarOff, Timer, Edit3, ArrowRightLeft, Eye, EyeOff, PanelRightOpen, PanelRightClose, Share2, Maximize2, Minimize2, FileDiff } from 'lucide-react';
+import { Columns2, LayoutGrid, ListTodo, MessageSquare, Terminal, FileText, Star, StarOff, Timer, Edit3, ArrowRightLeft, Eye, EyeOff, PanelRightOpen, PanelRightClose, Share2, Maximize2, Minimize2, FileDiff, Trash2 } from 'lucide-react';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle, type Layout, type GroupImperativeHandle } from 'react-resizable-panels';
 import PathInsertMenu from '@/components/shared/PathInsertMenu';
 import RequiredSkillsBanner from '@/components/skills/RequiredSkillsBanner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { cn, shortProject } from '@/lib/utils';
+import { cn, shortProject, getSessionDisplayName } from '@/lib/utils';
 import { useDashboardStore } from '@/stores/dashboard-store';
 import TerminalView, { type TerminalViewHandle } from './TerminalView';
 import TaskQueuePanel from './TaskQueuePanel';
@@ -21,6 +21,7 @@ import { useIncognito } from '@/hooks/useIncognito';
 import SessionSidebar, { readSidebarState, writeSidebarState } from './SessionSidebar';
 import SessionModelMenu from './SessionModelMenu';
 import SessionAccountMenu from './SessionAccountMenu';
+import DeleteSessionButton from './DeleteSessionButton';
 import { getLaunchFlags, getPrimaryProviderId, getProviderStatus, PROVIDER_SHORT_NAMES, buildResumeArgs, buildProviderArgs, buildProviderFlags, formatModelDisplay, buildModelSwitchInput, getSelectableAccounts, isLocalAccountId } from '@/lib/launch-flags';
 import type { CodexReasoningEffort, ProviderId, ProviderStatus } from '@/lib/launch-flags';
 import { saveSessionIntent, readSessionIntent, migrateSessionIntent } from '@/lib/session-intent';
@@ -676,6 +677,18 @@ export default function SessionDetailPage() {
           >
             <Edit3 className="h-4 w-4" />
           </Button>
+
+          {/* A temp `new-*`/`handoff-*` id has no transcript to delete yet. */}
+          {sessionId && !/^(new|handoff)-/.test(sessionId) && (
+            <DeleteSessionButton
+              sessionId={sessionId}
+              label={session ? getSessionDisplayName(session, null, 80) : sessionId}
+              onDeleted={() => navigate('/sessions')}
+              className="h-9 w-auto px-3"
+            >
+              <Trash2 className="h-4 w-4" />
+            </DeleteSessionButton>
+          )}
 
           {session?.projectDir && (
             <Button

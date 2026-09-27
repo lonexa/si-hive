@@ -21,7 +21,7 @@ import {
 } from '../parsers/session-state.js';
 import { getEnabledProviders } from '../providers/registry.js';
 import { isIncognitoId, isIncognitoPath, isIncognitoProjectDir } from '../privacy/incognito.js';
-import { isSessionInScope } from '../project-scope.js';
+import { isSessionInScope, isSessionHidden, hiddenSince } from '../project-scope.js';
 import { parseGeminiSession } from '../parsers/gemini-session-parser.js';
 import { parseCodexSession } from '../parsers/codex-session-parser.js';
 import type { LastEntryType } from '../parsers/session-scanner.js';
@@ -113,6 +113,12 @@ export class Aggregator extends EventEmitter {
       if (discovered.sessionId === sessionId) return filePath;
     }
     return undefined;
+  }
+
+  /** Every session file found on disk, with its last known working directory. */
+  getDiscoveredSessions(): Array<DiscoveredFile & { cwd?: string }> {
+    const states = getAllFileStates();
+    return Array.from(this.discoveredFiles.values(), (d) => ({ ...d, cwd: states.get(d.filePath)?.cwd }));
   }
 
   initialize(): void {
@@ -353,6 +359,12 @@ export class Aggregator extends EventEmitter {
     }
 
     const existing = this.state.sessions.find((s) => s.id === sessionId);
+    if (!existing && hiddenSince(this.config, fileState.cwd) !== null
+      && !isSessionHidden(this.config, fileState.cwd, discovered.projectDir, fileState.mtimeMs)) {
+      // A session in a project removed from Hive was used again: list it (and the project) again.
+      this.refreshSessions();
+      return;
+    }
     if (existing) {
       const lastEntryType = machineStateToLastEntryType(fileState);
       const ageMs = Date.now() - fileState.mtimeMs;
@@ -962,6 +974,8 @@ export class Aggregator extends EventEmitter {
 
       // Only sessions that ran inside this install's project folders.
       if (!isSessionInScope(this.config, state?.cwd, discovered.projectDir)) continue;
+      // ...and not in a project removed from Hive (unless used since).
+      if (isSessionHidden(this.config, state?.cwd, discovered.projectDir, Date.parse(lastActivity))) continue;
 
       const lastEntryType: LastEntryType = state
         ? machineStateToLastEntryType(state)

@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { GitBranch, FileText, Monitor, Clock, ScrollText, Plus, ChevronDown, EyeOff, Eye } from 'lucide-react';
+import { GitBranch, FileText, Monitor, Clock, ScrollText, Plus, ChevronDown, EyeOff, Eye, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import AISessionButton from '@/components/shared/AISessionButton';
 import GenericLaunchDialog from '@/components/shared/GenericLaunchDialog';
+import RemoveProjectDialog from './RemoveProjectDialog';
 import { useAISession } from '@/hooks/useAISession';
 import { useIncognito } from '@/hooks/useIncognito';
 import { projectGeneral } from '@/lib/prompt-templates';
@@ -26,7 +27,11 @@ function timeAgo(dateStr?: string): string {
   return `${days}d ago`;
 }
 
-export default function ProjectCard({ project, selectedProvider: parentProvider }: { project: ProjectInfo; selectedProvider?: ProviderId }) {
+export default function ProjectCard({ project, selectedProvider: parentProvider, onRemoved }: {
+  project: ProjectInfo;
+  selectedProvider?: ProviderId;
+  onRemoved?: () => void;
+}) {
   const navigate = useNavigate();
   const { launchSession } = useAISession();
   const { canToggle, busy: incognitoBusy, notice: incognitoNotice, isProjectIncognito, toggleProject } = useIncognito();
@@ -36,6 +41,7 @@ export default function ProjectCard({ project, selectedProvider: parentProvider 
   const [selectedProvider, setSelectedProvider] = useState<ProviderId>(parentProvider ?? 'claude');
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [launchOpen, setLaunchOpen] = useState(false);
+  const [removeOpen, setRemoveOpen] = useState(false);
   const chevronRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -99,6 +105,18 @@ export default function ProjectCard({ project, selectedProvider: parentProvider 
                 {project.totalSessions}
               </Badge>
             )}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+              title="Remove project"
+              aria-label="Remove project"
+              onClick={() => setRemoveOpen(true)}
+              data-track="project.remove"
+              data-track-category="action"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
 
@@ -255,6 +273,7 @@ export default function ProjectCard({ project, selectedProvider: parentProvider 
           <p className="text-[11px] text-violet-300/80 mt-2">{incognitoNotice}</p>
         )}
       </CardContent>
+      <RemoveProjectDialog project={project} open={removeOpen} onOpenChange={setRemoveOpen} onRemoved={onRemoved} />
       <GenericLaunchDialog
         open={launchOpen}
         onOpenChange={setLaunchOpen}

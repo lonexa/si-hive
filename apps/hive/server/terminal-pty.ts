@@ -64,6 +64,8 @@ export interface PtySession {
   id: string;
   pty: import('node-pty').IPty;
   cwd: string;
+  /** Arguments the process was started with (e.g. `--resume <sessionId>`). */
+  args: string[];
   /**
    * Credential identity this PTY was spawned under (undefined = default
    * account). The account is fixed by the process environment at spawn time, so
@@ -510,6 +512,7 @@ export async function spawnPty(
     id,
     pty: ptyProcess,
     cwd: safeCwd,
+    args: args ?? [],
     accountId,
     autoTrustDone: false,
     outputBuffer: '',
@@ -922,6 +925,43 @@ export function writeToPtyBySessionId(sessionId: string, data: string): boolean 
     }
   }
   return sent;
+}
+
+/**
+ * Kill every PTY running a given agent session: PTYs keyed by the session ID
+ * (or a grid ID ending in it), PTYs started with it in their arguments
+ * (`--resume <id>`), and any `knownIds` the caller has mapped to it.
+ * Returns how many were killed.
+ */
+export function destroyPtysForSession(sessionId: string, knownIds: Iterable<string> = []): number {
+  const ids = new Set(knownIds);
+  for (const [id, session] of activeSessions) {
+    if (id.includes(sessionId) || session.args.includes(sessionId)) ids.add(id);
+  }
+  let killed = 0;
+  for (const id of ids) {
+    if (!activeSessions.has(id)) continue;
+    destroyPty(id);
+    killed++;
+  }
+  return killed;
+}
+
+/** Kill every PTY whose working directory is `dir` or inside it. Returns how many were killed. */
+export function destroyPtysUnder(dir: string): number {
+  const norm = (p: string) => {
+    const r = path.resolve(p).replace(/[\\/]+$/, '');
+    return isWindows ? r.toLowerCase() : r;
+  };
+  const root = norm(dir);
+  let killed = 0;
+  for (const [id, session] of [...activeSessions]) {
+    const cwd = norm(session.cwd);
+    if (cwd !== root && !cwd.startsWith(root + path.sep)) continue;
+    destroyPty(id);
+    killed++;
+  }
+  return killed;
 }
 
 /**

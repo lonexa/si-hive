@@ -64,3 +64,61 @@ export function isSessionInScope(config: HiveConfig, cwd: string | null | undefi
   if (!hasProjectScope(config)) return true;
   return cwd ? isPathInScope(config, cwd) : isProjectDirInScope(config, encodedDir);
 }
+
+/*
+ * Projects removed from Hive. `config.hiddenProjects` maps a project path to
+ * when it was removed. Anything in it that was last active before then stays
+ * out of the lists; new work there brings it back, so starting a session in a
+ * removed folder isn't silently invisible.
+ */
+
+function hiddenEntries(config: HiveConfig): Array<[string, number]> {
+  return Object.entries(config.hiddenProjects ?? {})
+    .map(([p, at]): [string, number] => [p, Date.parse(at)])
+    .filter(([, at]) => Number.isFinite(at));
+}
+
+/** When the project containing `p` was removed from Hive, or null if it wasn't. */
+export function hiddenSince(config: HiveConfig, p: string | null | undefined): number | null {
+  if (!p) return null;
+  const target = norm(p);
+  let since: number | null = null;
+  for (const [root, at] of hiddenEntries(config)) {
+    const r = norm(root);
+    if (target !== r && !target.startsWith(r + path.sep)) continue;
+    since = since === null ? at : Math.max(since, at);
+  }
+  return since;
+}
+
+/** True when a session belongs to a removed project and hasn't been active since. */
+export function isSessionHidden(
+  config: HiveConfig,
+  cwd: string | null | undefined,
+  encodedDir: string | null | undefined,
+  lastActivityMs: number,
+): boolean {
+  let since = hiddenSince(config, cwd);
+  if (!cwd && encodedDir) {
+    const dir = isWindows ? encodedDir.toLowerCase() : encodedDir;
+    for (const [root, at] of hiddenEntries(config)) {
+      const enc = isWindows ? encode(root).toLowerCase() : encode(root);
+      if (dir === enc || dir.startsWith(enc + '-')) since = since === null ? at : Math.max(since, at);
+    }
+  }
+  return since !== null && lastActivityMs <= since;
+}
+
+export function hideProject(config: HiveConfig, p: string): void {
+  config.hiddenProjects = { ...unhidden(config, p), [path.resolve(p)]: new Date().toISOString() };
+}
+
+export function unhideProject(config: HiveConfig, p: string): void {
+  if (!config.hiddenProjects) return;
+  config.hiddenProjects = unhidden(config, p);
+}
+
+function unhidden(config: HiveConfig, p: string): Record<string, string> {
+  const target = norm(p);
+  return Object.fromEntries(Object.entries(config.hiddenProjects ?? {}).filter(([k]) => norm(k) !== target));
+}

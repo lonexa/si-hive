@@ -4,6 +4,8 @@ import { Monitor, Search, X } from 'lucide-react';
 import { useDashboardStore } from '@/stores/dashboard-store';
 import { Chip, ChipRow, Compat, Segmented, EmptyState, RowGroup, SectionTitle, SessionRow } from './components';
 import { compareSessions, isListedSession, needsAttention, usePendingSpawn } from './mobile-data';
+import DeleteSessionButton from '@/components/sessions/DeleteSessionButton';
+import { getSessionDisplayName } from '@/lib/utils';
 
 const TemplatesTab = lazy(() => import('@/components/sessions/TemplatesTab'));
 const PromptsTab = lazy(() => import('@/components/sessions/PromptsTab'));
@@ -156,7 +158,20 @@ function SessionList() {
             <SectionTitle>{g.title}</SectionTitle>
             <RowGroup>
               {g.items.map(({ s, subs }) => (
-                <SessionRow key={s.id} session={s} activity={sessionActivities[s.id]} teamInfo={teamMap.get(s.id)} subCount={subs} />
+                <SessionRow
+                  key={s.id}
+                  session={s}
+                  activity={sessionActivities[s.id]}
+                  teamInfo={teamMap.get(s.id)}
+                  subCount={subs}
+                  trailing={
+                    <DeleteSessionButton
+                      sessionId={s.id}
+                      label={getSessionDisplayName(s, teamMap.get(s.id), 120)}
+                      className="-mr-1 h-9 w-9 shrink-0 text-muted-foreground/60"
+                    />
+                  }
+                />
               ))}
             </RowGroup>
           </div>

@@ -172,6 +172,8 @@ export interface HiveConfig {
   theme: 'dark' | 'light';
   /** Extra folders scanned for local project checkouts (in addition to projectsRoot). */
   projectRoots?: string[];
+  /** Projects removed from Hive: absolute path → ISO time removed (see project-scope.ts). */
+  hiddenProjects?: Record<string, string>;
   /** Configured git-host / tracker connections (see integrations/types.ts). */
   integrations?: IntegrationConnection[];
   /** Per-project overrides, keyed by absolute project path. */

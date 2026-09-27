@@ -53,6 +53,7 @@ import { activityWss } from './sessions/activity-stream.js';
 import { getSessionInfo, getLiveSessionHolder } from './sessions/replay-client.js';
 import { encodeWindowsPath } from './parsers/process-discovery-windows.js';
 import { registerScreenshotRoutes } from './sessions/screenshot-routes.js';
+import { registerDeleteRoutes } from './sessions/delete-routes.js';
 import { registerAnalyticsRoutes } from './analytics/analytics-routes.js';
 import { registerGitRoutes } from './projects/git-routes.js';
 import { registerDependencyRoutes } from './projects/dependencies-routes.js';
@@ -82,7 +83,7 @@ import { registerAuthRoutes } from './auth/routes.js';
 import { createAuthTables, cleanExpiredSessions, migrateLiteToFull } from './auth/session-manager.js';
 import { authenticate, isPublicPath } from './auth/middleware.js';
 import { isAuthEnabled, getAuthSettings, localUser } from './auth/settings.js';
-import { isPathInScope, hasProjectScope } from './project-scope.js';
+import { isPathInScope, hasProjectScope, hiddenSince, unhideProject } from './project-scope.js';
 import { computeScopedStats, scopedPlanSlugs } from './insights/scoped.js';
 import type { AuthenticatedRequest } from './auth/types.js';
 import { readBody as sharedReadBody, sendJson as jsonResponse } from '../../../packages/shared/src/server/http-utils.js';
@@ -335,6 +336,10 @@ const AUDITABLE_ACTIONS: ReadonlyArray<{ method: string; pattern: RegExp }> = [
   { method: 'POST',   pattern: /^\/api\/updates\/apply$/ },
   { method: 'POST',   pattern: /^\/api\/system\/autostart$/ },
   { method: 'DELETE', pattern: /^\/api\/system\/autostart$/ },
+
+  // Deleting work
+  { method: 'DELETE', pattern: /^\/api\/sessions\/[^/]+$/ },
+  { method: 'POST',   pattern: /^\/api\/projects\/remove$/ },
 
   // Install actions (community packages)
   { method: 'POST',   pattern: /^\/api\/agents\/install$/ },
@@ -1501,6 +1506,23 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   // --- Session Screenshot (Playwright) ---
   if (registerScreenshotRoutes(url, req, res)) return;
+
+  // --- Delete a session / remove a project ---
+  if (registerDeleteRoutes(url, req, res, {
+    config,
+    saveConfig,
+    aggregator,
+    canRemoveProjects: (r) => !isAuthEnabled(config) || (r as AuthenticatedRequest).user?.role === 'admin',
+    terminalIdsFor: (sid) => [...terminalSessionIdMap].filter(([, s]) => s === sid).map(([termId]) => termId),
+    forgetSession: (sid) => {
+      let changed = false;
+      for (const [termId, s] of terminalSessionIdMap) {
+        if (s === sid) changed = terminalSessionIdMap.delete(termId) || changed;
+      }
+      if (changed) saveTerminalSessionMap();
+    },
+  })) return;
+
 
 
 
@@ -3648,7 +3670,7 @@ function getProjectMeta(projectPath: string, encodedDir?: string) {
   // Count sessions from live aggregator state
   const state = aggregator.getState();
   const liveSessions = state.sessions.filter(
-    (s) => s.cwd === projectPath || s.projectDir === projectPath
+    (s) => !s.isSubagent && (s.cwd === projectPath || s.projectDir === projectPath)
   );
   let sessionCount = liveSessions.length;
 
@@ -3758,7 +3780,11 @@ function handleGetProjects(res: http.ServerResponse): void {
     }
   }
 
-  const projects = Array.from(projectMap.values());
+  // Leave out projects removed from Hive, unless they've been used since.
+  const projects = Array.from(projectMap.values()).filter((p) => {
+    const since = hiddenSince(config, p.path);
+    return since === null || (!!p.lastActivity && Date.parse(p.lastActivity) > since);
+  });
 
   // Sort by last activity (most recent first), then by name
   projects.sort((a, b) => {
@@ -3847,6 +3873,13 @@ function handleCreateProject(req: http.IncomingMessage, res: http.ServerResponse
         } catch (err) {
           console.error(`[api] Failed to register project in ~/.claude/projects:`, err);
         }
+      }
+
+      // Adding a project that was removed earlier brings it back.
+      if (hiddenSince(config, projectPath) !== null) {
+        unhideProject(config, projectPath);
+        saveConfig(config);
+        aggregator.refreshSessions();
       }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });

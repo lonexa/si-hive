@@ -1,9 +1,10 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ChevronDown, EyeOff, FileText, FolderOpen, GitBranch, Monitor, Plus, Search } from 'lucide-react';
+import { ChevronDown, EyeOff, FileText, FolderOpen, GitBranch, Monitor, Plus, Search, Trash2 } from 'lucide-react';
 import { cn, timeAgo } from '@/lib/utils';
 import { useIncognito } from '@/hooks/useIncognito';
 import NewProjectDialog from '@/components/projects/NewProjectDialog';
+import RemoveProjectDialog from '@/components/projects/RemoveProjectDialog';
 import { Compat, EmptyState, Segmented } from './components';
 import { byRecent, useProjects, type ProjectInfo } from './use-projects';
 
@@ -18,7 +19,13 @@ const TABS = [
 
 type Sort = 'recent' | 'name' | 'active';
 
-function ProjectRow({ project, open, onToggle }: { project: ProjectInfo; open: boolean; onToggle: () => void }) {
+function ProjectRow({ project, open, onToggle, onRemoved }: {
+  project: ProjectInfo;
+  open: boolean;
+  onToggle: () => void;
+  onRemoved: () => void;
+}) {
+  const [removeOpen, setRemoveOpen] = useState(false);
   const { canToggle, busy, isProjectIncognito, toggleProject } = useIncognito();
   const incognito = isProjectIncognito(project.path);
   const encoded = encodeURIComponent(project.path);
@@ -85,8 +92,17 @@ function ProjectRow({ project, open, onToggle }: { project: ProjectInfo; open: b
               {incognito ? 'Incognito project — turn off' : 'Mark project incognito'}
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => setRemoveOpen(true)}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground active:text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Remove project
+          </button>
         </div>
       )}
+      <RemoveProjectDialog project={project} open={removeOpen} onOpenChange={setRemoveOpen} onRemoved={onRemoved} />
     </div>
   );
 }
@@ -148,7 +164,13 @@ function ProjectList() {
       ) : (
         <div className="overflow-hidden rounded-xl border border-border bg-card divide-y divide-border">
           {list.map((p) => (
-            <ProjectRow key={p.path} project={p} open={openPath === p.path} onToggle={() => setOpenPath(openPath === p.path ? null : p.path)} />
+            <ProjectRow
+              key={p.path}
+              project={p}
+              open={openPath === p.path}
+              onToggle={() => setOpenPath(openPath === p.path ? null : p.path)}
+              onRemoved={refresh}
+            />
           ))}
         </div>
       )}

@@ -6,6 +6,7 @@ import { cn, timeAgo, sessionStatusLabel, getSessionDisplayName, shortProject } 
 import { PROVIDER_SHORT_NAMES } from '@/lib/launch-flags';
 import ActivityLine from '@/components/shared/ActivityLine';
 import QuickActions from '@/components/shared/QuickActions';
+import DeleteSessionButton from './DeleteSessionButton';
 import { useDashboardStore } from '@/stores/dashboard-store';
 import type { Session, SessionActivity, TeamTask } from '@/stores/types';
 
@@ -59,7 +60,7 @@ export default function KanbanCard({
 
   return (
     <Card
-      className="cursor-pointer hover:bg-muted/50 transition-colors"
+      className="group cursor-pointer hover:bg-muted/50 transition-colors"
       onClick={() => navigate(`/sessions/${session.id}`)}
     >
       <CardContent className="p-2.5">
@@ -87,6 +88,11 @@ export default function KanbanCard({
             <Clock className="h-3 w-3" />
             {timeAgo(session.lastActivity)}
           </span>
+          <DeleteSessionButton
+            sessionId={session.id}
+            label={displayName}
+            className="-my-1 -mr-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+          />
         </div>
 
         {/* Row 2: prompt / display name (if different from project) */}

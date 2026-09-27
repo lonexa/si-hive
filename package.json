@@ -1,7 +1,7 @@
 {
   "name": "hive",
   "private": true,
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "SI Hive (Superintelligence Hive): a local dashboard for running and managing AI agents and workflows",
   "author": "Lonexa",
   "license": "MIT",

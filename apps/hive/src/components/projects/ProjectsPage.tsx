@@ -263,7 +263,7 @@ export default function ProjectsPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((p) => (
-            <ProjectCard key={p.path} project={p} selectedProvider={selectedProvider} />
+            <ProjectCard key={p.path} project={p} selectedProvider={selectedProvider} onRemoved={fetchProjects} />
           ))}
         </div>
       )}

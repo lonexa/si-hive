@@ -262,21 +262,27 @@ export interface LiveSessionHolder {
  * is checked for liveness before being reported.
  */
 export function getLiveSessionHolder(sessionId: string): LiveSessionHolder | undefined {
+  return listLiveSessionHolders().find((h) => h.sessionId === sessionId);
+}
+
+/** Every live `claude` process that currently holds a session. */
+export function listLiveSessionHolders(): Array<LiveSessionHolder & { sessionId: string }> {
   const dir = path.join(getClaudeHomeDir(), 'sessions');
   let files: string[];
   try {
     files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
   } catch {
-    return undefined;
+    return [];
   }
 
+  const holders: Array<LiveSessionHolder & { sessionId: string }> = [];
   for (const file of files) {
     try {
       const raw = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf-8')) as {
         pid?: number; sessionId?: string; kind?: string; status?: string;
         name?: string; cwd?: string; startedAt?: number;
       };
-      if (raw.sessionId !== sessionId || typeof raw.pid !== 'number') continue;
+      if (typeof raw.sessionId !== 'string' || typeof raw.pid !== 'number') continue;
       // Stale-file guard: signal 0 probes existence without touching the
       // process. ESRCH means gone; EPERM means alive but not ours to signal.
       try {
@@ -284,17 +290,18 @@ export function getLiveSessionHolder(sessionId: string): LiveSessionHolder | und
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'EPERM') continue;
       }
-      return {
+      holders.push({
+        sessionId: raw.sessionId,
         pid: raw.pid,
         kind: raw.kind ?? 'interactive',
         status: raw.status,
         name: raw.name,
         cwd: raw.cwd,
         startedAt: raw.startedAt,
-      };
+      });
     } catch { /* unreadable or partially written — skip */ }
   }
-  return undefined;
+  return holders;
 }
 
 /**
