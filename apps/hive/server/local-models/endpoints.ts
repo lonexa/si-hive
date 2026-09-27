@@ -108,6 +108,10 @@ export function buildLocalEnv(endpoint: LocalModelEndpoint): Record<string, stri
     ANTHROPIC_DEFAULT_HAIKU_MODEL: endpoint.model,
     CLAUDE_CODE_SUBAGENT_MODEL: endpoint.model,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    // The attribution header opens the system prompt and varies between
+    // requests, so a local server's prompt cache never matches and every turn
+    // re-processes the whole ~20k-token prompt.
+    CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
   };
   if (endpoint.contextTokens) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(endpoint.contextTokens);
   return env;
@@ -119,14 +123,36 @@ export function parseContextTokens(v: unknown): number | undefined {
   return typeof n === 'number' && Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-/** Replace any `--model <x>` (an Anthropic name from the UI) with the local model. */
+/**
+ * Adapt Claude Code's args for a local model:
+ * - Any `--model <x>` (an Anthropic name from the UI) becomes the local model.
+ * - Auto mode is dropped: its permission classifier only runs on Anthropic's
+ *   models, so every tool call fails with "auto mode cannot classify". The
+ *   session starts in acceptEdits instead (edits auto-approved, commands ask).
+ *   An explicit mode is always passed so a settings.json defaultMode of "auto"
+ *   cannot bring it back.
+ * - WebSearch is disabled: it is an Anthropic server-side tool, and a local
+ *   server returns no real results, so the model works from invented ones.
+ */
 export function withLocalModelArg(args: string[], model: string): string[] {
   const out: string[] = [];
+  let hasMode = false;
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--model') { i++; continue; }
-    if (args[i].startsWith('--model=')) continue;
-    out.push(args[i]);
+    const a = args[i];
+    if (a === '--model' || a === '--permission-mode') {
+      const value = args[++i];
+      if (a === '--permission-mode' && value !== undefined && value !== 'auto') {
+        out.push(a, value);
+        hasMode = true;
+      }
+      continue;
+    }
+    if (a.startsWith('--model=') || a === '--enable-auto-mode' || a === '--permission-mode=auto') continue;
+    if (a.startsWith('--permission-mode=') || a === '--dangerously-skip-permissions') hasMode = true;
+    out.push(a);
   }
+  if (!hasMode) out.push('--permission-mode', 'acceptEdits');
+  out.push('--disallowedTools', 'WebSearch');
   out.push('--model', model);
   return out;
 }
