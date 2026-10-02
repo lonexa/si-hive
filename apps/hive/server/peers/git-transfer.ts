@@ -39,8 +39,12 @@ const IDENTITY = {
 };
 
 function git(cwd: string, args: string[], opts: { input?: Buffer; env?: Record<string, string> } = {}): Promise<Buffer> {
+  // Project folders created by a service account are owned by someone else,
+  // and git then refuses to touch them ("dubious ownership"). Hive works on
+  // these folders deliberately, so trust exactly the one at hand.
+  const trust = ['-c', `safe.directory=${path.resolve(cwd).replace(/\\/g, '/')}`];
   return new Promise((resolve, reject) => {
-    const child = execFile('git', args, {
+    const child = execFile('git', [...trust, ...args], {
       cwd,
       encoding: 'buffer',
       maxBuffer: MAX_BUFFER,
@@ -298,7 +302,22 @@ async function restoreWorktree(root: string, snapshot: string): Promise<void> {
  * Every file the incoming tree has must be identical here or missing (missing
  * ones are written); files only here stay, as untracked. Refuses otherwise.
  */
-async function adoptFolder(root: string, bundle: string | null, code: CodeInfo): Promise<string[]> {
+export interface ApplyOptions {
+  /**
+   * Adopting a plain folder whose files differ: copy this machine's versions
+   * here first, then replace them. Without it, differing files refuse.
+   */
+  backupDir?: string;
+}
+
+/** Same text apart from line endings (CRLF on disk vs LF in the repo is not a real difference). */
+function sameIgnoringCr(a: Buffer, b: Buffer): boolean {
+  if (a.equals(b)) return true;
+  const strip = (x: Buffer) => Buffer.from(x.filter((c) => c !== 13));
+  return strip(a).equals(strip(b));
+}
+
+async function adoptFolder(root: string, bundle: string | null, code: CodeInfo, opts: ApplyOptions = {}): Promise<string[]> {
   if (!bundle || !code.headSha) throw new TransferError(409, `${root} exists on this Hive and nothing was sent to compare it with.`);
   await git(root, ['init', '-q']);
   try {
@@ -320,10 +339,30 @@ async function adoptFolder(root: string, bundle: string | null, code: CodeInfo):
     } finally {
       fs.rmSync(idx, { force: true });
     }
-    if (conflicts.length > 0) {
-      throw new TransferError(409,
-        `${root} already exists on this Hive without git, and ${conflicts.length} file(s) differ from the incoming version:\n` +
-        `${conflicts.slice(0, 15).join('\n')}${conflicts.length > 15 ? '\n…' : ''}\nMake the copies match, or move the folder aside, and try again.`);
+    // A file that differs only in line endings is the same file.
+    const real: string[] = [];
+    for (const rel of conflicts) {
+      try {
+        const incoming = await git(root, ['cat-file', 'blob', `${desired}:${rel}`]);
+        if (!sameIgnoringCr(fs.readFileSync(path.join(root, rel)), incoming)) real.push(rel);
+      } catch {
+        real.push(rel);
+      }
+    }
+    const notes: string[] = [];
+    if (real.length > 0) {
+      if (!opts.backupDir) {
+        throw new TransferError(409,
+          `${root} already exists on this Hive without git, and ${real.length} file(s) differ from the incoming version:\n` +
+          `${real.slice(0, 15).join('\n')}${real.length > 15 ? '\n…' : ''}\n` +
+          'Make the copies match, or replace them (their current versions are kept in a backup folder).');
+      }
+      for (const rel of real) {
+        const dest = path.join(opts.backupDir, rel);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(path.join(root, rel), dest);
+      }
+      notes.push(`${real.length} differing file(s) were replaced; the previous versions are in ${opts.backupDir}.`);
     }
 
     if (code.branch) {
@@ -336,7 +375,7 @@ async function adoptFolder(root: string, bundle: string | null, code: CodeInfo):
     // Write the files this folder was missing (the others are already identical).
     await restoreWorktree(root, code.snapshot ?? code.headSha);
     await dropIncomingRefs(root);
-    return [`${root} was already here without git; it is now the same repository, with your files kept.`];
+    return [`${root} was already here without git; it is now the same repository, with your files kept.`, ...notes];
   } catch (err) {
     fs.rmSync(path.join(root, '.git'), { recursive: true, force: true });
     throw err;
@@ -347,11 +386,11 @@ async function adoptFolder(root: string, bundle: string | null, code: CodeInfo):
  * Bring `root` to the source's exact state (branch, commit, working tree).
  * `bundle` is null when the target already had every commit and the tree was clean.
  */
-export async function applyRepo(root: string, bundle: string | null, code: CodeInfo, knownTrees: string[]): Promise<string[]> {
+export async function applyRepo(root: string, bundle: string | null, code: CodeInfo, knownTrees: string[], opts: ApplyOptions = {}): Promise<string[]> {
   const notes: string[] = [];
   const check = await checkTarget(root, knownTrees);
 
-  if (check.adopt) return adoptFolder(root, bundle, code);
+  if (check.adopt) return adoptFolder(root, bundle, code, opts);
 
   const why = refusal(root, check, code.rootCommit);
   if (why) {

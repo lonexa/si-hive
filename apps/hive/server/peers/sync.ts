@@ -25,6 +25,8 @@ export interface ProjectManifest {
   name: string;
   sourceRoot: string;
   code: CodeInfo;
+  /** Adopting a plain folder with differing files: back them up and replace them. */
+  replaceDiffering?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +101,7 @@ export async function importProject(config: HiveConfig, head: Buffer, bundlePath
     throw new TransferError(409, `A terminal or session is running in ${prepared.targetRoot} on this Hive. Close it there first.`);
   }
   return withFolderLock(prepared.targetRoot, async () => {
-    const notes = await receiveCode(prepared.targetRoot, bundlePath, m.code);
+    const notes = await receiveCode(prepared.targetRoot, bundlePath, m.code, undefined, { replaceDiffering: m.replaceDiffering });
     return { targetRoot: prepared.targetRoot, notes };
   });
 }
@@ -204,7 +206,9 @@ async function row(h: LocalProject | undefined, t: LocalProject | undefined, con
 // ---------------------------------------------------------------------------
 // Actions
 
-export async function sendProject(config: HiveConfig, peer: PeerConfig, me: CallerIdentity, localPath: string) {
+export async function sendProject(
+  config: HiveConfig, peer: PeerConfig, me: CallerIdentity, localPath: string, opts: { replaceDiffering?: boolean } = {},
+) {
   const root = resolveOwnProject(config, localPath);
   const project = await describeProject(root);
   if (!project.isGit) throw new TransferError(400, `${project.name} isn't a git repository yet. Make it one first.`);
@@ -217,7 +221,9 @@ export async function sendProject(config: HiveConfig, peer: PeerConfig, me: Call
     const bundlePath = tmpFile('.bundle');
     try {
       const code = await packRepo(root, prep.haveHead, bundlePath);
-      const manifest: ProjectManifest = { kind: 'project', format: FORMAT, name: project.name, sourceRoot: root, code };
+      const manifest: ProjectManifest = {
+        kind: 'project', format: FORMAT, name: project.name, sourceRoot: root, code, replaceDiffering: opts.replaceDiffering,
+      };
       const result = await peerUpload<{ targetRoot: string; notes: string[] }>(
         peer, me, '/api/peer/projects/import', Buffer.from(JSON.stringify(manifest)), code.hasBundle ? bundlePath : null,
       );
@@ -230,14 +236,17 @@ export async function sendProject(config: HiveConfig, peer: PeerConfig, me: Call
   });
 }
 
-export async function getProject(config: HiveConfig, peer: PeerConfig, me: CallerIdentity, remotePath: string, id: ProjectIdentity) {
+export async function getProject(
+  config: HiveConfig, peer: PeerConfig, me: CallerIdentity, remotePath: string, id: ProjectIdentity,
+  opts: { replaceDiffering?: boolean } = {},
+) {
   const prepared = await prepareTarget(config, id);
   if (prepared.busy) throw new TransferError(409, `A terminal or session is running in ${prepared.targetRoot} here. Close it first.`);
   return withFolderLock(prepared.targetRoot, async () => {
     const framed = await peerDownload(peer, me, '/api/peer/projects/export', { path: remotePath, haveHead: prepared.haveHead });
     try {
       const m = parseManifest(framed.head);
-      const notes = await receiveCode(prepared.targetRoot, framed.bundlePath, m.code);
+      const notes = await receiveCode(prepared.targetRoot, framed.bundlePath, m.code, undefined, opts);
       return { targetRoot: prepared.targetRoot, notes };
     } finally {
       removeQuietly(framed.bundlePath);

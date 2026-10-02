@@ -662,7 +662,7 @@ function handleSync(url: URL, req: AuthenticatedRequest, res: http.ServerRespons
   if (action === 'send') {
     return run(res, async () => {
       const b = parse(await readBody(req));
-      sendJson(res, 200, await sendProject(deps.config, peer, me(deps, req), str(b.path) ?? ''));
+      sendJson(res, 200, await sendProject(deps.config, peer, me(deps, req), str(b.path) ?? '', { replaceDiffering: b.replaceDiffering === true }));
     });
   }
   if (action === 'get') {
@@ -670,7 +670,7 @@ function handleSync(url: URL, req: AuthenticatedRequest, res: http.ServerRespons
       const b = parse(await readBody(req));
       const remotePath = str(b.path);
       if (!remotePath) return sendJson(res, 400, { error: 'path is required' });
-      sendJson(res, 200, await getProject(deps.config, peer, me(deps, req), remotePath, identityFrom(b)));
+      sendJson(res, 200, await getProject(deps.config, peer, me(deps, req), remotePath, identityFrom(b), { replaceDiffering: b.replaceDiffering === true }));
     });
   }
   if (action === 'auto') {

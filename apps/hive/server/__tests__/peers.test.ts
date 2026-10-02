@@ -196,6 +196,31 @@ describe('git transfer', () => {
     expect(sh(dest, 'status', '--porcelain')).toBe('?? extra.txt');
   });
 
+  it('treats CRLF vs LF as the same file when adopting', async () => {
+    const lf = newRepo();
+    fs.writeFileSync(path.join(lf, 'notes.md'), 'line one\nline two\n');
+    sh(lf, 'add', '.');
+    sh(lf, 'commit', '-q', '-m', 'lf');
+    const dest = destDir();
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, 'notes.md'), 'line one\r\nline two\r\n');
+    await send(lf, dest);
+    expect(text(path.join(dest, 'notes.md'))).toBe('line one\nline two\n');
+  });
+
+  it('replaces differing files only when asked, keeping a backup', async () => {
+    const dest = destDir();
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, 'a.txt'), 'older\n');
+    const b = bundleFile();
+    const code = await gt.packRepo(src, null, b);
+    const backupDir = path.join(path.dirname(dest), 'backup');
+    const notes = await gt.applyRepo(dest, b, code, [], { backupDir });
+    expect(notes.join(' ')).toMatch(/replaced/);
+    expect(text(path.join(dest, 'a.txt'))).toBe('one\ntwo\n');
+    expect(text(path.join(backupDir, 'a.txt'))).toBe('older\n');
+  });
+
   it('refuses to adopt a plain folder whose files differ, and leaves it untouched', async () => {
     const dest = destDir();
     fs.mkdirSync(dest, { recursive: true });

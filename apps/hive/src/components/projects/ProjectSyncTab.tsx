@@ -79,7 +79,7 @@ export default function ProjectSyncTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Record<string, { ok: boolean; text: string }>>({});
+  const [messages, setMessages] = useState<Record<string, { ok: boolean; text: string; canReplace?: boolean }>>({});
 
   useEffect(() => {
     peerApi<{ peers: PeerInfo[] }>('/api/peers')
@@ -106,7 +106,8 @@ export default function ProjectSyncTab() {
       setMessages((m) => ({ ...m, [rowKey]: { ok: true, text: [done, ...(r.notes ?? [])].join(' ') } }));
       load();
     } catch (e) {
-      setMessages((m) => ({ ...m, [rowKey]: { ok: false, text: (e as Error).message } }));
+      const text = (e as Error).message;
+      setMessages((m) => ({ ...m, [rowKey]: { ok: false, text, canReplace: /differ from the incoming version/.test(text) } }));
     } finally {
       setBusy(null);
     }
@@ -188,6 +189,10 @@ export default function ProjectSyncTab() {
             const s = STATUS_STYLE[r.status];
             const msg = messages[rowKey];
             const plainHere = r.here && !r.here.isGit;
+            const doSend = (replaceDiffering = false) => act(rowKey, () => peerApi(`/api/peer-sync/${peerId}/send`, { path: r.here!.path, replaceDiffering }), `Sent to ${peer?.label}.`);
+            const doGet = (replaceDiffering = false) => act(rowKey, () => peerApi(`/api/peer-sync/${peerId}/get`, {
+              path: r.there!.path, name: r.there!.name, originUrl: r.there!.originUrl, rootCommit: r.there!.rootCommit, replaceDiffering,
+            }), `Updated from ${peer?.label}.`);
             return (
               <div key={rowKey} className="px-3 py-2 text-sm">
                 <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1.3fr)_8rem_minmax(0,2fr)_auto] gap-x-3 gap-y-1 items-center">
@@ -216,16 +221,14 @@ export default function ProjectSyncTab() {
                     {r.canSend && r.here && (
                       <Button size="sm" variant="secondary" disabled={!!busy} className="gap-1"
                         title={`Make ${peer?.label} match this machine`}
-                        onClick={() => act(rowKey, () => peerApi(`/api/peer-sync/${peerId}/send`, { path: r.here!.path }), `Sent to ${peer?.label}.`)}>
+                        onClick={() => doSend()}>
                         <ArrowUpFromLine className="h-3.5 w-3.5" /> Send
                       </Button>
                     )}
                     {r.canGet && r.there && (
                       <Button size="sm" variant="secondary" disabled={!!busy} className="gap-1"
                         title={`Make this machine match ${peer?.label}`}
-                        onClick={() => act(rowKey, () => peerApi(`/api/peer-sync/${peerId}/get`, {
-                          path: r.there!.path, name: r.there!.name, originUrl: r.there!.originUrl, rootCommit: r.there!.rootCommit,
-                        }), `Updated from ${peer?.label}.`)}>
+                        onClick={() => doGet()}>
                         <ArrowDownToLine className="h-3.5 w-3.5" /> Get
                       </Button>
                     )}
@@ -235,6 +238,14 @@ export default function ProjectSyncTab() {
                   <div className={cn('mt-1 flex gap-1.5 text-xs whitespace-pre-wrap', msg.ok ? 'text-muted-foreground' : 'text-destructive')}>
                     {msg.ok ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" /> : <AlertCircle className="h-3.5 w-3.5 shrink-0" />}
                     <span>{msg.text}</span>
+                  </div>
+                )}
+                {msg?.canReplace && (
+                  <div className="mt-1 flex justify-end">
+                    <Button size="sm" variant="destructive" disabled={!!busy}
+                      onClick={() => (r.canSend && r.here ? doSend(true) : doGet(true))}>
+                      Replace {r.canSend && r.here ? 'there' : 'here'}, keeping a backup
+                    </Button>
                   </div>
                 )}
               </div>

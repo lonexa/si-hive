@@ -159,14 +159,19 @@ export async function prepareTarget(
 }
 
 /** Apply incoming code to `targetRoot` and remember the result. */
-export async function receiveCode(targetRoot: string, bundlePath: string | null, code: CodeInfo, ownSessionId?: string): Promise<string[]> {
+export async function receiveCode(
+  targetRoot: string, bundlePath: string | null, code: CodeInfo, ownSessionId?: string, opts: { replaceDiffering?: boolean } = {},
+): Promise<string[]> {
   const others = fs.existsSync(targetRoot)
     ? livePtysUnder(targetRoot).filter((t) => !(ownSessionId && t.includes(ownSessionId)))
     : [];
   if (others.length > 0) {
     throw new TransferError(409, `A terminal or session is running in ${targetRoot} on this Hive. Close it there first.`);
   }
-  const notes = await applyRepo(targetRoot, bundlePath, code, fingerprintsFor(targetRoot));
+  const backupDir = opts.replaceDiffering
+    ? path.join(path.dirname(targetRoot), '.hive-backups', `${path.basename(targetRoot)}-${new Date().toISOString().replace(/[:.]/g, '-')}`)
+    : undefined;
+  const notes = await applyRepo(targetRoot, bundlePath, code, fingerprintsFor(targetRoot), { backupDir });
   recordFolderState(targetRoot, code.tree);
   if (code.rootCommit) linkProject(code.rootCommit, targetRoot);
   return notes;
