@@ -10,8 +10,7 @@ import path from 'node:path';
 import type { HiveConfig } from '../types.js';
 import { GitClient } from '../projects/git-client.js';
 import { getProviderDefinition, getGitHostConnection } from '../integrations/registry.js';
-import { decodeWindowsProjectDir } from '../parsers/process-discovery-windows.js';
-import { isWindows } from '../platform.js';
+import { decodeClaudeProjectDir } from '../claude-paths.js';
 import { isPathInScope } from '../project-scope.js';
 
 export interface LocalRepo {
@@ -27,11 +26,6 @@ const git = new GitClient();
 let cache: { at: number; repos: LocalRepo[] } | null = null;
 const TTL_MS = 60_000;
 
-function decodeProjectDirName(encoded: string): string {
-  if (isWindows) return decodeWindowsProjectDir(encoded);
-  return '/' + encoded.replace(/-/g, '/');
-}
-
 /** Local project directories Hive knows about (agent history + configured roots). */
 export function listLocalProjectPaths(config: HiveConfig): string[] {
   const paths = new Set<string>();
@@ -42,7 +36,7 @@ export function listLocalProjectPaths(config: HiveConfig): string[] {
   const claudeProjects = path.join(config.claudeHome, 'projects');
   if (fs.existsSync(claudeProjects)) {
     for (const entry of fs.readdirSync(claudeProjects, { withFileTypes: true })) {
-      if (entry.isDirectory()) add(decodeProjectDirName(entry.name));
+      if (entry.isDirectory()) add(decodeClaudeProjectDir(entry.name, claudeProjects));
     }
   }
 

@@ -20,8 +20,7 @@ import path from 'node:path';
 import { getDb } from '../db.js';
 import { isIncognitoId, isIncognitoPath, isIncognitoProjectLabel, isIncognitoSession, incognitoRoots } from '../privacy/incognito.js';
 import { getClaudeProjectsDir } from '../sessions/replay-client.js';
-import { isWindows } from '../platform.js';
-import { decodeWindowsProjectDir } from '../parsers/process-discovery-windows.js';
+import { decodeClaudeProjectDir } from '../claude-paths.js';
 
 export interface TurnBlock {
   id?: number;
@@ -281,7 +280,7 @@ export class TurnTimeTracker {
         if (hit !== undefined) return hit;
         let out = dir;
         try {
-          out = isWindows ? decodeWindowsProjectDir(dir) : `/${dir.replace(/-/g, '/')}`;
+          out = decodeClaudeProjectDir(dir, root);
         } catch { /* keep the raw name */ }
         decoded.set(dir, out);
         return out;

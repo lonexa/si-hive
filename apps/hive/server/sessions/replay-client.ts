@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { isWindows } from '../platform.js';
-import { decodeWindowsProjectDir } from '../parsers/process-discovery-windows.js';
+import { decodeClaudeProjectDir } from '../claude-paths.js';
 import { loadConfig } from '../config.js';
 import { isProjectDirInScope } from '../project-scope.js';
 
@@ -67,17 +66,9 @@ export interface SessionDetail {
   };
 }
 
-/**
- * Decode a project directory name to a human-readable path.
- * On Windows, uses the Windows path decoder. On other platforms,
- * replaces dashes with slashes.
- */
+/** Decode a project directory name to its real path (see claude-paths.ts). */
 function decodeProjectDir(dirName: string): string {
-  if (isWindows) {
-    return decodeWindowsProjectDir(dirName);
-  }
-  // macOS/Linux: directory names use dashes for slashes
-  return '/' + dirName.replace(/-/g, '/');
+  return decodeClaudeProjectDir(dirName, getClaudeProjectsDir());
 }
 
 /**

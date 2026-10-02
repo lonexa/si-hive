@@ -92,6 +92,15 @@ export const MODULES: HiveModule[] = [
     featureKeys: ['gmail'],
     routePrefixes: ['/api/gmail/', '/api/calendar/'],
   },
+  {
+    id: 'peers',
+    name: 'Peer Hives',
+    description: 'Hand a session, with its code and uncommitted changes, to another SI Hive (e.g. an always-on server) and bring it back.',
+    // Inert until a peer is paired: every /api/peer/ call needs a token issued here.
+    defaultEnabled: true,
+    featureKeys: ['peers'],
+    routePrefixes: ['/api/peers', '/api/peer/', '/api/peer-handoffs/'],
+  },
 ];
 
 const byId = new Map(MODULES.map((m) => [m.id, m]));

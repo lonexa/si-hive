@@ -17,7 +17,7 @@ import {
 import { spawnChatPty, getChatPtyStatus, destroyChatPty, sendMessageToPty, abortChatPty, getChatPtyTerminalId } from './chat-pty-manager.js';
 import { notifyChatSessionId } from './chat-ws.js';
 import type { AuthenticatedRequest } from '../auth/types.js';
-import { encodeWindowsPath } from '../parsers/process-discovery-windows.js';
+import { encodeClaudeProjectDir } from '../claude-paths.js';
 
 export function handleChatRoutes(
   url: URL,
@@ -204,16 +204,9 @@ export function handleChatRoutes(
   return false;
 }
 
-/**
- * Encode a project path to Claude's directory name format.
- * Uses encodeWindowsPath on Windows, similar encoding on other platforms.
- */
+/** Encode a project path to Claude's directory name format. */
 function encodeProjectDir(projectPath: string): string {
-  if (process.platform === 'win32') {
-    return encodeWindowsPath(projectPath);
-  }
-  // Mac/Linux: /Users/foo/bar → -Users-foo-bar
-  return projectPath.replace(/\//g, '-');
+  return encodeClaudeProjectDir(projectPath);
 }
 
 /**

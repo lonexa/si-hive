@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Columns2, LayoutGrid, ListTodo, MessageSquare, Terminal, FileText, Star, StarOff, Timer, Edit3, ArrowRightLeft, Eye, EyeOff, PanelRightOpen, PanelRightClose, Share2, Maximize2, Minimize2, FileDiff, Trash2 } from 'lucide-react';
+import { Columns2, LayoutGrid, ListTodo, MessageSquare, Terminal, FileText, Star, StarOff, Timer, Edit3, ArrowRightLeft, Eye, EyeOff, PanelRightOpen, PanelRightClose, Share2, Maximize2, Minimize2, FileDiff, Trash2, Server } from 'lucide-react';
 import { Group as PanelGroup, Panel, Separator as PanelResizeHandle, type Layout, type GroupImperativeHandle } from 'react-resizable-panels';
 import PathInsertMenu from '@/components/shared/PathInsertMenu';
 import RequiredSkillsBanner from '@/components/skills/RequiredSkillsBanner';
@@ -17,6 +17,9 @@ import { isTouchDevice, IS_MOBILE_VIEW } from '@/lib/device';
 import PersonaSelector from './PersonaSelector';
 import ConsultPanel from './ConsultPanel';
 import HandoffDialog from './HandoffDialog';
+import SendToPeerDialog from './SendToPeerDialog';
+import HandedOffBanner from './HandedOffBanner';
+import { useSessionHandoff } from '@/lib/peer-handoff';
 import { useIncognito } from '@/hooks/useIncognito';
 import SessionSidebar, { readSidebarState, writeSidebarState } from './SessionSidebar';
 import SessionModelMenu from './SessionModelMenu';
@@ -161,6 +164,11 @@ export default function SessionDetailPage() {
   const incognito = session?.incognito === true
     || projectIncognito
     || isSessionIncognito(sessionId);
+
+  // Peer Hives: is the live copy of this session on another Hive?
+  const { state: peerState, reload: reloadPeerState } = useSessionHandoff(isNewSession ? undefined : sessionId);
+  const handedOff = peerState?.lock ?? null;
+  const [sendToPeerOpen, setSendToPeerOpen] = useState(false);
 
   // Always look up the JSONL-derived cwd from the server for resume flows.
   // Skips temp IDs (new-/handoff-) — those use the intent's cwd directly.
@@ -916,8 +924,46 @@ export default function SessionDetailPage() {
               Hand off
             </Button>
           )}
+
+          {/* Send to another SI Hive (Peer Hives module) — moves the transcript
+              and the code, so it is unavailable while incognito. */}
+          {sessionId && !isNewSession && !incognito && !handedOff && (peerState?.peers.length ?? 0) > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSendToPeerOpen(true)}
+              className="gap-1.5 text-muted-foreground hover:text-foreground hover:bg-accent"
+              title="Move this session and its code to another SI Hive"
+              data-track="session_detail.send_to_peer_open"
+              data-track-category="modal"
+            >
+              <Server className="h-4 w-4" />
+              Send to Hive
+            </Button>
+          )}
         </div>
       </div>
+
+      {sessionId && handedOff && (
+        <HandedOffBanner
+          sessionId={sessionId}
+          lock={handedOff}
+          onChanged={() => {
+            reloadPeerState();
+            setTerminalEpoch((e) => e + 1);
+          }}
+        />
+      )}
+
+      {sessionId && peerState && (
+        <SendToPeerDialog
+          open={sendToPeerOpen}
+          onClose={() => setSendToPeerOpen(false)}
+          onSent={reloadPeerState}
+          sessionId={sessionId}
+          peers={peerState.peers}
+        />
+      )}
 
       {sessionId && (
         <HandoffDialog
@@ -964,7 +1010,7 @@ export default function SessionDetailPage() {
                 </div>
               </div>
             )}
-            {sessionId && viewMode === 'terminal' && terminalArgs !== null && sessionLookupState !== 'not-found' && (
+            {sessionId && viewMode === 'terminal' && !handedOff && terminalArgs !== null && sessionLookupState !== 'not-found' && (
               <TerminalView
                 ref={terminalHandleRef}
                 terminalId={sessionId}
@@ -980,7 +1026,7 @@ export default function SessionDetailPage() {
                 onSessionIdDiscovered={handleSessionIdDiscovered}
               />
             )}
-            {sessionId && viewMode === 'transcript' && (
+            {sessionId && (viewMode === 'transcript' || handedOff) && (
               <TranscriptViewer sessionId={sessionId} />
             )}
           </div>

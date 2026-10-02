@@ -5,6 +5,7 @@ import { useDashboardStore } from '@/stores/dashboard-store';
 import { Chip, ChipRow, Compat, Segmented, EmptyState, RowGroup, SectionTitle, SessionRow } from './components';
 import { compareSessions, isListedSession, needsAttention, usePendingSpawn } from './mobile-data';
 import DeleteSessionButton from '@/components/sessions/DeleteSessionButton';
+import HandedOffBadge from '@/components/sessions/HandedOffBadge';
 import { getSessionDisplayName } from '@/lib/utils';
 
 const TemplatesTab = lazy(() => import('@/components/sessions/TemplatesTab'));
@@ -165,11 +166,14 @@ function SessionList() {
                   teamInfo={teamMap.get(s.id)}
                   subCount={subs}
                   trailing={
-                    <DeleteSessionButton
-                      sessionId={s.id}
-                      label={getSessionDisplayName(s, teamMap.get(s.id), 120)}
-                      className="-mr-1 h-9 w-9 shrink-0 text-muted-foreground/60"
-                    />
+                    <>
+                      <HandedOffBadge sessionId={s.id} />
+                      <DeleteSessionButton
+                        sessionId={s.id}
+                        label={getSessionDisplayName(s, teamMap.get(s.id), 120)}
+                        className="-mr-1 h-9 w-9 shrink-0 text-muted-foreground/60"
+                      />
+                    </>
                   }
                 />
               ))}

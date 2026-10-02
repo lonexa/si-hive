@@ -32,6 +32,7 @@ export const FEATURE_ROLES: Record<string, HiveRole[]> = {
   'work': ['admin', 'full'],
   'pull-requests': ['admin', 'full'],
   'main-feed': ['admin', 'full'],
+  'peers': ['admin'],
 
   // Admin only
   // System settings that affect every user (login providers, …)
@@ -96,6 +97,7 @@ export const FEATURE_LABELS: Record<string, string> = {
   'work': 'Work',
   'pull-requests': 'Pull Requests',
   'main-feed': 'What Landed',
+  'peers': 'Peer Hives',
   'user-management': 'User Management',
   'admin-settings': 'System Settings',
   'skill-requirements': 'Skill Requirements',

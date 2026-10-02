@@ -13,6 +13,7 @@ import IntegrationsTab from './IntegrationsTab';
 import AiTab from './AiTab';
 import AuthenticationTab from './AuthenticationTab';
 import ModulesTab from './ModulesTab';
+import PeersTab from './PeersTab';
 import { useAuth } from '@/auth/AuthProvider';
 
 // Explicitly typed rather than `as const`: with a const-asserted array the
@@ -28,6 +29,7 @@ const ALL_TABS: ReadonlyArray<{ value: string; label: string; feature?: string }
   { value: 'ai', label: 'AI' },
   { value: 'integrations', label: 'Integrations' },
   { value: 'storage', label: 'Storage' },
+  { value: 'peers', label: 'Peers', feature: 'peers' },
   { value: 'authentication', label: 'Authentication', feature: 'admin-settings' },
   { value: 'security', label: 'Security', feature: 'security' },
   { value: 'audit', label: 'Audit Trail', feature: 'security' },
@@ -73,6 +75,9 @@ export default function SettingsContainerPage() {
         </TabsContent>
         <TabsContent value="schedules" className="mt-4">
           <SchedulesPage />
+        </TabsContent>
+        <TabsContent value="peers" className="mt-4">
+          <PeersTab />
         </TabsContent>
         <TabsContent value="modules" className="mt-4">
           <ModulesTab />

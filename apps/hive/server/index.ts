@@ -51,7 +51,7 @@ import { registerReplayRoutes } from './sessions/replay-routes.js';
 import { registerDropfileRoute } from './sessions/dropfile.js';
 import { activityWss } from './sessions/activity-stream.js';
 import { getSessionInfo, getLiveSessionHolder } from './sessions/replay-client.js';
-import { encodeWindowsPath } from './parsers/process-discovery-windows.js';
+import { encodeClaudeProjectDir, decodeClaudeProjectDir } from './claude-paths.js';
 import { registerScreenshotRoutes } from './sessions/screenshot-routes.js';
 import { registerDeleteRoutes } from './sessions/delete-routes.js';
 import { registerAnalyticsRoutes } from './analytics/analytics-routes.js';
@@ -64,6 +64,7 @@ import { registerUserManagementRoutes } from './admin/user-routes.js';
 import { registerEventTrackRoutes } from './admin/event-track-routes.js';
 import { registerNowRoutes } from './now/routes.js';
 import { registerHandoffRoutes } from './handoff/routes.js';
+import { registerPeerRoutes, resumeBlockedReason } from './peers/routes.js';
 import { registerSearchRoutes } from './search/routes.js';
 import { registerReviewRoutes } from './reviews/routes.js';
 import { checkForUpdates, applyUpdates, getChangelog, PUBLIC_GITHUB, parseGitHubRepo } from './updater.js';
@@ -456,7 +457,9 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   }
 
   // --- Enforce auth on non-public API routes ---
-  if (isAuthEnabled(config) && !isPublicPath(url.pathname, req.socket.remoteAddress) && url.pathname.startsWith('/api/')) {
+  // /api/peer/* is called by other SI Hives and checks its own peer token
+  // (peers/auth.ts) whether login is on or off.
+  if (isAuthEnabled(config) && !isPublicPath(url.pathname, req.socket.remoteAddress) && url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/peer/')) {
     if (!(req as AuthenticatedRequest).user) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Authentication required' }));
@@ -1456,6 +1459,16 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     if (registerHandoffRoutes(url, req, res)) return;
   }
 
+  // --- Peer Hives: hand a session to another SI Hive and back ---
+  if (url.pathname.startsWith('/api/peer')) {
+    if (registerPeerRoutes(url, req, res, {
+      config,
+      saveConfig,
+      db,
+      terminalIdsFor: (sid) => [...terminalSessionIdMap].filter(([, s]) => s === sid).map(([termId]) => termId),
+    })) return;
+  }
+
 
   // --- Universal search + Ask Hive RAG ---
   if (url.pathname === '/api/search' || url.pathname === '/api/search/ask') {
@@ -1855,8 +1868,7 @@ function saveTerminalSessionMap(): void {
 loadTerminalSessionMap();
 
 function encodeProjectDirForWatch(p: string): string {
-  if (process.platform === 'win32') return encodeWindowsPath(p);
-  return p.replace(/\//g, '-');
+  return encodeClaudeProjectDir(p);
 }
 
 function broadcastDiscoveredSessionId(termId: string, sessionId: string): void {
@@ -2097,6 +2109,12 @@ wssTerm.on('connection', (ws, req: http.IncomingMessage) => {
             const resumeIdx = msg.args.indexOf('--resume');
             const resumeId = resumeIdx >= 0 && msg.args.length > resumeIdx + 1 ? msg.args[resumeIdx + 1] : undefined;
             if (resumeId) {
+              // Handed off to another Hive: resuming here would fork its history.
+              const blocked = resumeBlockedReason(resumeId);
+              if (blocked) {
+                ws.send(JSON.stringify({ type: 'error', message: blocked, handedOff: true }));
+                break;
+              }
               const info = getSessionInfo(resumeId);
               if (info.exists && info.cwd && info.cwd !== cwd) {
                 console.log(`[ws-term] Correcting resume cwd for ${resumeId}: ${cwd} → ${info.cwd}`);
@@ -3643,9 +3661,7 @@ function handleDeleteQueueTask(taskId: string, res: http.ServerResponse): void {
 // --- Projects API Handlers ---
 
 function decodeProjectDirName(encoded: string): string {
-  if (isWindows) return decodeWindowsProjectDir(encoded);
-  // macOS/Linux: dashes become path separators, leading - becomes /
-  return '/' + encoded.replace(/-/g, '/');
+  return decodeClaudeProjectDir(encoded, path.join(config.claudeHome, 'projects'));
 }
 
 function getProjectMeta(projectPath: string, encodedDir?: string) {
@@ -3867,7 +3883,7 @@ function handleCreateProject(req: http.IncomingMessage, res: http.ServerResponse
       // even when the folder lives outside projectsRoot.
       if (useExisting) {
         try {
-          const encoded = projectPath.replace(/\\/g, '-').replace(/\//g, '-').replace(/:/g, '-');
+          const encoded = encodeClaudeProjectDir(projectPath);
           const claudeProjectsDir = path.join(config.claudeHome, 'projects', encoded);
           fs.mkdirSync(claudeProjectsDir, { recursive: true });
         } catch (err) {
@@ -4073,7 +4089,7 @@ function handleSyncAllInstructions(res: http.ServerResponse): void {
       for (const d of dirs) {
         if (!d.isDirectory()) continue;
         // Decode Windows-encoded path: C--Users-alice-project → C:\Users\alice\project
-        const decoded = isWindows ? decodeWindowsProjectDir(d.name) : '/' + d.name.replace(/-/g, '/');
+        const decoded = decodeClaudeProjectDir(d.name, claudeProjectsDir);
         if (decoded && fs.existsSync(decoded) && isPathInScope(config, decoded)) projectPaths.add(decoded);
       }
     } catch { /* ignore */ }

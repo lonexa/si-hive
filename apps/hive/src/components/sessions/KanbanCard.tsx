@@ -7,6 +7,7 @@ import { PROVIDER_SHORT_NAMES } from '@/lib/launch-flags';
 import ActivityLine from '@/components/shared/ActivityLine';
 import QuickActions from '@/components/shared/QuickActions';
 import DeleteSessionButton from './DeleteSessionButton';
+import HandedOffBadge from './HandedOffBadge';
 import { useDashboardStore } from '@/stores/dashboard-store';
 import type { Session, SessionActivity, TeamTask } from '@/stores/types';
 
@@ -84,6 +85,7 @@ export default function KanbanCard({
               {PROVIDER_SHORT_NAMES[session.provider]}
             </span>
           )}
+          <HandedOffBadge sessionId={session.id} />
           <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground shrink-0">
             <Clock className="h-3 w-3" />
             {timeAgo(session.lastActivity)}
