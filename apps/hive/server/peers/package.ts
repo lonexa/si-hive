@@ -23,7 +23,7 @@ import { getProvider } from '../providers/registry.js';
 import { TranscriptRewriter } from './transcript-rewrite.js';
 import { TransferError, packRepo, repoState, tmpFile, type CodeInfo } from './git-transfer.js';
 import { getLock } from './store.js';
-import { prepareTarget, receiveCode, resolveTargetRoot, type PreparedTarget, type ProjectIdentity } from './projects.js';
+import { busyMessage, prepareTarget, receiveCode, resolveTargetRoot, type PreparedTarget, type ProjectIdentity } from './projects.js';
 
 export const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const FORMAT = 2;
@@ -222,7 +222,7 @@ export async function prepareImport(
   if (!SESSION_ID.test(id.sessionId)) throw new TransferError(400, 'Invalid session id');
   const prepared = await prepareTarget(config, id);
   if (prepared.busy) {
-    throw new TransferError(409, `Another terminal or session is running in ${prepared.targetRoot} on this Hive. Close it there first.`);
+    throw new TransferError(409, busyMessage(`${prepared.targetRoot} on this Hive`));
   }
   return {
     ...prepared,

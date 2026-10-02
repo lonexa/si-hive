@@ -10,7 +10,7 @@ import { loadConfig } from '../config.js';
 import { isWindows } from '../platform.js';
 import { TransferError, headContains, packRepo, repoState, tmpFile, type CodeInfo } from './git-transfer.js';
 import {
-  codeSent, describeProject, githubSizeNote, listProjects, prepareTarget, projectFolders, receiveCode,
+  busyMessage, codeSent, describeProject, githubSizeNote, listProjects, prepareTarget, projectFolders, receiveCode,
   type LocalProject, type PreparedTarget, type ProjectIdentity,
 } from './projects.js';
 import { listPeers, selfName, type PeerConfig, type PeersConfigShape } from './config.js';
@@ -65,7 +65,7 @@ export async function listForPeer(config: HiveConfig, contains: Array<{ rootComm
 export async function exportProject(config: HiveConfig, p: string, haveHead: string | null) {
   const root = resolveOwnProject(config, p);
   if ((await describeProject(root)).busy) {
-    throw new TransferError(409, `A terminal or session is running in ${root} on this Hive. Close it there first.`);
+    throw new TransferError(409, busyMessage(`${root} on this Hive`));
   }
   return withFolderLock(root, async () => {
     const state = await repoState(root);
@@ -98,7 +98,7 @@ export async function importProject(config: HiveConfig, head: Buffer, bundlePath
   const m = parseManifest(head);
   const prepared = await prepareTarget(config, identityOf(m));
   if (prepared.busy) {
-    throw new TransferError(409, `A terminal or session is running in ${prepared.targetRoot} on this Hive. Close it there first.`);
+    throw new TransferError(409, busyMessage(`${prepared.targetRoot} on this Hive`));
   }
   return withFolderLock(prepared.targetRoot, async () => {
     const notes = await receiveCode(prepared.targetRoot, bundlePath, m.code, undefined, { replaceDiffering: m.replaceDiffering });
@@ -212,10 +212,10 @@ export async function sendProject(
   const root = resolveOwnProject(config, localPath);
   const project = await describeProject(root);
   if (!project.isGit) throw new TransferError(400, `${project.name} isn't a git repository yet. Make it one first.`);
-  if (project.busy) throw new TransferError(409, `A terminal or session is running in ${project.name} here. Close it first.`);
+  if (project.busy) throw new TransferError(409, busyMessage(`${project.name} here`));
   const id: ProjectIdentity = { name: project.name, originUrl: project.originUrl, rootCommit: project.rootCommit };
   const prep = await peerJson<PreparedTarget>(peer, me, 'POST', '/api/peer/projects/prepare', id, 120_000);
-  if (prep.busy) throw new TransferError(409, `A terminal or session is running in ${project.name} on ${peer.label}. Close it there first.`);
+  if (prep.busy) throw new TransferError(409, busyMessage(`${project.name} on ${peer.label}`));
 
   return withFolderLock(root, async () => {
     const bundlePath = tmpFile('.bundle');
@@ -241,7 +241,7 @@ export async function getProject(
   opts: { replaceDiffering?: boolean } = {},
 ) {
   const prepared = await prepareTarget(config, id);
-  if (prepared.busy) throw new TransferError(409, `A terminal or session is running in ${prepared.targetRoot} here. Close it first.`);
+  if (prepared.busy) throw new TransferError(409, busyMessage(`${prepared.targetRoot} here`));
   return withFolderLock(prepared.targetRoot, async () => {
     const framed = await peerDownload(peer, me, '/api/peer/projects/export', { path: remotePath, haveHead: prepared.haveHead });
     try {

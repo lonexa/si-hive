@@ -259,6 +259,23 @@ describe('git transfer', () => {
   });
 });
 
+describe('busy folders', () => {
+  it('counts only sessions that are mid-turn, not idle or finished ones', async () => {
+    const { setSessionSource, workingSessionsUnder } = await import('../peers/projects.js');
+    const root = path.resolve(os.tmpdir(), 'proj-x');
+    setSessionSource(() => [
+      { id: 'a', cwd: root, status: 'done' },
+      { id: 'b', cwd: path.join(root, 'sub'), status: 'idle' },
+      { id: 'c', cwd: path.join(root, 'sub'), status: 'working' },
+      { id: 'd', cwd: path.resolve(os.tmpdir(), 'proj-x2'), status: 'working' },
+      { id: 'e:agent1', cwd: root, status: 'waiting-approval' },
+    ]);
+    expect(workingSessionsUnder(root)).toEqual(['c', 'e:agent1']);
+    expect(workingSessionsUnder(root, 'e')).toEqual(['c']);
+    setSessionSource(() => []);
+  });
+});
+
 describe('wire format', () => {
   it('streams a head and a large bundle through and back', async () => {
     const { framedStream, readFramed } = await import('../peers/wire.js');

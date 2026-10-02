@@ -10,7 +10,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { HiveConfig } from '../types.js';
 import { isWindows } from '../platform.js';
-import { livePtysUnder } from '../terminal-pty.js';
 import {
   TransferError, applyRepo, changedFiles, checkTarget, headTree, isRepoRoot, largeFiles, normalizeRemote, refusal, repoState, worktreeTree,
   type CodeInfo, type TargetCheck,
@@ -30,7 +29,7 @@ export interface LocalProject {
   /** Tree hash of the working tree's content (equal on two machines = same files). */
   tree: string | null;
   lastCommitAt: string | null;
-  /** A terminal / agent session is running in it right now. */
+  /** An agent session is mid-turn in it right now (an idle or finished session doesn't count). */
   busy: boolean;
 }
 
@@ -44,6 +43,33 @@ const norm = (p: string) => {
   const r = path.resolve(p).replace(/[\\/]+$/, '');
   return isWindows ? r.toLowerCase() : r;
 };
+
+// Sessions Hive is tracking. The aggregator lives in index.ts, which hands it in.
+type SessionSource = () => Array<{ id: string; cwd?: string; status: string }>;
+let sessionSource: SessionSource = () => [];
+export function setSessionSource(fn: SessionSource): void {
+  sessionSource = fn;
+}
+
+/** Mid-turn: replacing files under these would pull them out from under a working agent. */
+const WORKING = new Set(['working', 'waiting-approval']);
+
+/**
+ * Sessions actively working in `dir` (or below). A finished or idle session
+ * keeps its terminal open waiting for the next message; that doesn't count.
+ */
+export function workingSessionsUnder(dir: string, exceptSessionId?: string): string[] {
+  const root = norm(dir);
+  return sessionSource()
+    .filter((s) => WORKING.has(s.status) && !!s.cwd)
+    .filter((s) => { const c = norm(s.cwd!); return c === root || c.startsWith(root + path.sep); })
+    .filter((s) => !(exceptSessionId && s.id.startsWith(exceptSessionId)))
+    .map((s) => s.id);
+}
+
+const BUSY = (where: string) =>
+  `A session is working in ${where} right now. Let it finish its turn (or stop it) and try again.`;
+export { BUSY as busyMessage };
 
 /** Project folders: everything directly under the projects roots, plus explicitly added projects. */
 export function projectFolders(config: HiveConfig): string[] {
@@ -63,7 +89,7 @@ export function projectFolders(config: HiveConfig): string[] {
 
 export async function describeProject(dir: string): Promise<LocalProject> {
   const name = path.basename(dir);
-  const busy = livePtysUnder(dir).length > 0;
+  const busy = workingSessionsUnder(dir).length > 0;
   if (!(await isRepoRoot(dir))) {
     return { name, path: dir, isGit: false, rootCommit: null, branch: null, headSha: null, originUrl: null, changes: 0, tree: null, lastCommitAt: null, busy };
   }
@@ -143,18 +169,17 @@ export interface PreparedTarget extends TargetCheck {
 /**
  * What would happen to this project here — asked before the sender stops or
  * packs anything. Throws when the transfer would be refused.
- * `ownSessionId`: a session handoff stops its own terminal, so that one doesn't count as busy.
+ * A session handoff stops its own session, so that one doesn't count as busy.
  */
 export async function prepareTarget(
   config: HiveConfig,
   id: ProjectIdentity & { sessionId?: string },
-  ownTerminals: string[] = [],
 ): Promise<PreparedTarget> {
   const targetRoot = await resolveTargetRoot(config, id);
   const check = await checkTarget(targetRoot, fingerprintsFor(targetRoot));
   const why = refusal(targetRoot, check, id.rootCommit);
   if (why) throw new TransferError(409, why);
-  const busy = fs.existsSync(targetRoot) && livePtysUnder(targetRoot).some((t) => !ownTerminals.includes(t) && !(id.sessionId && t.includes(id.sessionId)));
+  const busy = fs.existsSync(targetRoot) && workingSessionsUnder(targetRoot, id.sessionId).length > 0;
   return { ...check, targetRoot, busy };
 }
 
@@ -162,11 +187,8 @@ export async function prepareTarget(
 export async function receiveCode(
   targetRoot: string, bundlePath: string | null, code: CodeInfo, ownSessionId?: string, opts: { replaceDiffering?: boolean } = {},
 ): Promise<string[]> {
-  const others = fs.existsSync(targetRoot)
-    ? livePtysUnder(targetRoot).filter((t) => !(ownSessionId && t.includes(ownSessionId)))
-    : [];
-  if (others.length > 0) {
-    throw new TransferError(409, `A terminal or session is running in ${targetRoot} on this Hive. Close it there first.`);
+  if (fs.existsSync(targetRoot) && workingSessionsUnder(targetRoot, ownSessionId).length > 0) {
+    throw new TransferError(409, BUSY(`${targetRoot} on this Hive`));
   }
   const backupDir = opts.replaceDiffering
     ? path.join(path.dirname(targetRoot), '.hive-backups', `${path.basename(targetRoot)}-${new Date().toISOString().replace(/[:.]/g, '-')}`)
