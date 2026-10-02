@@ -17,6 +17,8 @@ export interface PeerConfig {
   label: string;
   /** Root URL of the other Hive, e.g. https://box.example.ts.net */
   baseUrl: string;
+  /** Fast-forward committed project work with this peer in the background (sync.ts). */
+  autoSync?: boolean;
 }
 
 export interface PeerTokenMeta {

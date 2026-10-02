@@ -70,6 +70,24 @@ function db() {
       )
     `);
     d.exec(`CREATE INDEX IF NOT EXISTS idx_peer_handoffs_session ON peer_handoffs(session_id, id DESC)`);
+    // Working-tree content (tree hash) of a folder as of the last transfer in
+    // or out: a dirty folder still at that state holds nothing new and may be
+    // set aside when the next transfer arrives.
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS peer_folder_states (
+        local_root TEXT PRIMARY KEY,
+        tree TEXT NOT NULL,
+        recorded_at TEXT NOT NULL
+      )
+    `);
+    // Which local folder holds a project (by its first commit), once it has synced.
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS peer_project_links (
+        root_commit TEXT PRIMARY KEY,
+        local_root TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
     ready = true;
   }
   return d;
@@ -139,12 +157,34 @@ export function setStatus(sessionId: string, status: HandoffStatus): boolean {
   return true;
 }
 
-/** Fingerprints this Hive recorded for a folder when sessions left it. */
+/** Record a folder's content after a transfer in or out of it. */
+export function recordFolderState(localRoot: string, tree: string): void {
+  db().prepare(`
+    INSERT INTO peer_folder_states (local_root, tree, recorded_at) VALUES (?, ?, ?)
+    ON CONFLICT(local_root) DO UPDATE SET tree = excluded.tree, recorded_at = excluded.recorded_at
+  `).run(localRoot, tree, new Date().toISOString());
+}
+
+/** Content states this Hive recorded for a folder (safe to set aside if still current). */
 export function fingerprintsFor(localRoot: string): string[] {
-  const rows = db().prepare(`
+  const d = db();
+  const states = d.prepare(`SELECT tree FROM peer_folder_states WHERE local_root = ?`).all(localRoot) as Array<{ tree: string }>;
+  const legacy = d.prepare(`
     SELECT DISTINCT fingerprint FROM peer_handoffs WHERE local_root = ? AND fingerprint IS NOT NULL
   `).all(localRoot) as Array<{ fingerprint: string }>;
-  return rows.map((r) => r.fingerprint);
+  return [...states.map((r) => r.tree), ...legacy.map((r) => r.fingerprint)];
+}
+
+export function linkProject(rootCommit: string, localRoot: string): void {
+  db().prepare(`
+    INSERT INTO peer_project_links (root_commit, local_root, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(root_commit) DO UPDATE SET local_root = excluded.local_root, updated_at = excluded.updated_at
+  `).run(rootCommit, localRoot, new Date().toISOString());
+}
+
+export function linkedRoot(rootCommit: string): string | null {
+  const r = db().prepare(`SELECT local_root FROM peer_project_links WHERE root_commit = ?`).get(rootCommit) as { local_root: string } | undefined;
+  return r?.local_root ?? null;
 }
 
 /** Where this session (or, failing that, this repo) landed last time. */

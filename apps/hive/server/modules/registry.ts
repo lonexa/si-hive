@@ -99,7 +99,7 @@ export const MODULES: HiveModule[] = [
     // Inert until a peer is paired: every /api/peer/ call needs a token issued here.
     defaultEnabled: true,
     featureKeys: ['peers'],
-    routePrefixes: ['/api/peers', '/api/peer/', '/api/peer-handoffs/'],
+    routePrefixes: ['/api/peers', '/api/peer/', '/api/peer-handoffs/', '/api/peer-sync/'],
   },
 ];
 

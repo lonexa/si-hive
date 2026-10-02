@@ -99,44 +99,154 @@ describe('git transfer', () => {
     fs.writeFileSync(path.join(src, 'node_modules', 'big.js'), 'ignored');
   });
 
-  it('round-trips commits, uncommitted and untracked changes into an empty folder', async () => {
-    const payload = await gt.packRepo(src, null, 50 * 1024 * 1024);
-    expect(payload.bundle).toBeDefined();
-    expect(payload.untracked.map((f) => f.rel.replace(/\\/g, '/'))).toEqual(['new/b.txt']);
+  const bundleFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'peer-bundle-')), 'x.bundle');
+  const destDir = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'peer-dst-')), 'app');
 
-    const dest = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'peer-dst-')), 'app');
-    await gt.applyRepo(dest, payload, []);
+  async function send(from: string, to: string, known: string[] = []) {
+    const b = bundleFile();
+    const have = fs.existsSync(to) ? (await gt.repoState(to)).headSha : null;
+    const code = await gt.packRepo(from, have, b);
+    const notes = await gt.applyRepo(to, code.hasBundle ? b : null, code, known);
+    return { code, notes };
+  }
+
+  it('round-trips commits, uncommitted and untracked changes into an empty folder', async () => {
+    const dest = destDir();
+    const { code } = await send(src, dest);
+    expect(code.hasBundle).toBe(true);
+    expect(code.snapshot).toBeTruthy();
     expect(text(path.join(dest, 'a.txt'))).toBe('one\ntwo\n');
     expect(text(path.join(dest, 'new', 'b.txt'))).toBe('untracked\n');
     expect(fs.existsSync(path.join(dest, 'node_modules'))).toBe(false);
     expect(sh(dest, 'rev-parse', 'HEAD')).toBe(sh(src, 'rev-parse', 'HEAD'));
     expect(sh(dest, 'symbolic-ref', '--short', 'HEAD')).toBe('main');
+    // Uncommitted stays uncommitted, untracked stays untracked.
+    expect(sh(dest, 'status', '--porcelain').split('\n').map((l) => l.trim()).sort()).toEqual(['?? new/', 'M a.txt']);
     // Same content, so the fingerprints agree.
     expect(await gt.fingerprint(dest)).toBe(await gt.fingerprint(src));
+    expect(sh(dest, 'for-each-ref', 'refs/hive')).toBe('');
   });
 
-  it('sends only new commits when the target has the base', async () => {
-    const base = sh(src, 'rev-parse', 'HEAD');
-    const same = await gt.packRepo(src, base, 50 * 1024 * 1024);
-    expect(same.bundle).toBeUndefined();
+  it('sends nothing when the target already has everything', async () => {
+    const clean = newRepo();
+    fs.writeFileSync(path.join(clean, 'x.txt'), 'x\n');
+    sh(clean, 'add', '.');
+    sh(clean, 'commit', '-q', '-m', 'x');
+    const code = await gt.packRepo(clean, sh(clean, 'rev-parse', 'HEAD'), bundleFile());
+    expect(code.hasBundle).toBe(false);
+    expect(code.snapshot).toBeNull();
+  });
+
+  it('sends only new commits, and carries deletions', async () => {
+    const a = newRepo();
+    fs.writeFileSync(path.join(a, 'keep.txt'), 'k\n');
+    fs.writeFileSync(path.join(a, 'gone.txt'), 'g\n');
+    sh(a, 'add', '.');
+    sh(a, 'commit', '-q', '-m', 'one');
+    const dest = destDir();
+    await send(a, dest);
+
+    fs.writeFileSync(path.join(a, 'keep.txt'), 'k2\n');
+    sh(a, 'commit', '-q', '-am', 'two');
+    fs.rmSync(path.join(a, 'gone.txt'));                    // uncommitted deletion
+    const { code } = await send(a, dest, []);
+    expect(code.hasBundle).toBe(true);
+    expect(sh(dest, 'rev-parse', 'HEAD')).toBe(sh(a, 'rev-parse', 'HEAD'));
+    expect(text(path.join(dest, 'keep.txt'))).toBe('k2\n');
+    expect(fs.existsSync(path.join(dest, 'gone.txt'))).toBe(false);
   });
 
   it('refuses to overwrite unknown local changes, but sets aside its own', async () => {
-    const payload = await gt.packRepo(src, null, 50 * 1024 * 1024);
-    const dest = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'peer-dst-')), 'app');
-    await gt.applyRepo(dest, payload, []);
+    const dest = destDir();
+    await send(src, dest);
     fs.writeFileSync(path.join(dest, 'a.txt'), 'someone else edited this\n');
-    await expect(gt.applyRepo(dest, payload, [])).rejects.toThrow(/local changes/);
+    await expect(send(src, dest)).rejects.toThrow(/uncommitted changes/);
 
-    // Exactly the state this Hive recorded when the session left: stash and proceed.
+    // Exactly the state this Hive recorded last time: stash and proceed.
     const fp = await gt.fingerprint(dest);
-    const notes = await gt.applyRepo(dest, payload, [fp]);
+    const { notes } = await send(src, dest, [fp]);
     expect(notes.join(' ')).toMatch(/stash/);
     expect(text(path.join(dest, 'a.txt'))).toBe('one\ntwo\n');
   });
 
+  it('adopts an existing plain folder whose files match, keeping extra files', async () => {
+    const dest = destDir();
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, 'a.txt'), 'one\ntwo\n');     // same as source
+    fs.writeFileSync(path.join(dest, 'local-only.txt'), 'mine\n'); // only here
+    const { notes } = await send(src, dest);
+    expect(notes.join(' ')).toMatch(/same repository/);
+    expect(sh(dest, 'rev-parse', 'HEAD')).toBe(sh(src, 'rev-parse', 'HEAD'));
+    expect(text(path.join(dest, 'new', 'b.txt'))).toBe('untracked\n');  // missing file written
+    expect(text(path.join(dest, 'local-only.txt'))).toBe('mine\n');
+  });
+
+  it('adopts a plain folder from a clean source too', async () => {
+    const clean = newRepo();
+    fs.writeFileSync(path.join(clean, 'p.txt'), 'p\n');
+    fs.writeFileSync(path.join(clean, 'q.txt'), 'q\n');
+    sh(clean, 'add', '.');
+    sh(clean, 'commit', '-q', '-m', 'p');
+    const dest = destDir();
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, 'p.txt'), 'p\n');
+    fs.writeFileSync(path.join(dest, 'extra.txt'), 'e\n');
+    await send(clean, dest);
+    expect(text(path.join(dest, 'q.txt'))).toBe('q\n');
+    expect(sh(dest, 'status', '--porcelain')).toBe('?? extra.txt');
+  });
+
+  it('refuses to adopt a plain folder whose files differ, and leaves it untouched', async () => {
+    const dest = destDir();
+    fs.mkdirSync(dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, 'a.txt'), 'different\n');
+    await expect(send(src, dest)).rejects.toThrow(/differ/);
+    expect(fs.existsSync(path.join(dest, '.git'))).toBe(false);
+    expect(text(path.join(dest, 'a.txt'))).toBe('different\n');
+  });
+
+  it('refuses a different repository with the same name', async () => {
+    const other = newRepo();
+    fs.writeFileSync(path.join(other, 'z.txt'), 'z\n');
+    sh(other, 'add', '.');
+    sh(other, 'commit', '-q', '-m', 'unrelated');
+    await expect(send(src, other)).rejects.toThrow(/different git repository/);
+  });
+
+  it('makes a plain folder a local repo with standard ignores', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'peer-init-'));
+    fs.writeFileSync(path.join(dir, 'notes.md'), 'hi\n');
+    fs.writeFileSync(path.join(dir, '.env'), 'SECRET=1\n');
+    fs.mkdirSync(path.join(dir, 'node_modules'));
+    fs.writeFileSync(path.join(dir, 'node_modules', 'x.js'), 'x');
+    const r = await gt.initRepo(dir);
+    const files = sh(dir, 'ls-files').split('\n');
+    expect(files).toContain('notes.md');
+    expect(files).toContain('.gitignore');
+    expect(files).not.toContain('.env');
+    expect(files.some((f) => f.startsWith('node_modules'))).toBe(false);
+    expect(r.files).toBe(files.length);
+    expect((await gt.repoState(dir)).rootCommit).toBe(r.commit);
+  });
+
   it('matches remotes written in different forms', () => {
     expect(gt.normalizeRemote('git@github.com:Org/Repo.git')).toBe(gt.normalizeRemote('https://github.com/org/repo'));
+  });
+});
+
+describe('wire format', () => {
+  it('streams a head and a large bundle through and back', async () => {
+    const { framedStream, readFramed } = await import('../peers/wire.js');
+    const big = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'peer-wire-')), 'b.bundle');
+    const data = Buffer.alloc(5 * 1024 * 1024 + 123);
+    for (let i = 0; i < data.length; i += 4096) data[i] = i % 251;
+    fs.writeFileSync(big, data);
+    const head = Buffer.from(JSON.stringify({ hello: 'world' }));
+    const out = await readFramed(framedStream(head, big));
+    expect(out.head.toString()).toBe(head.toString());
+    expect(fs.readFileSync(out.bundlePath!).equals(data)).toBe(true);
+    const none = await readFramed(framedStream(head, null));
+    expect(none.bundlePath).toBeNull();
   });
 });
 

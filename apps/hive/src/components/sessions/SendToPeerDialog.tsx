@@ -10,6 +10,7 @@ interface Preview {
   targetRoot: string;
   targetHasRepo: boolean;
   willStash: boolean;
+  willAdopt: boolean;
   peerLaunchFlags: { autoMode: boolean; dangerouslySkipPermissions: boolean };
   changes: { commits: number; modified: number; untracked: number };
 }
@@ -118,6 +119,7 @@ export default function SendToPeerDialog({ open, onClose, onSent, sessionId, pee
                 {preview.targetHasRepo ? '' : ' (new folder)'}.
               </div>
               {preview.willStash && <div>Changes left there by the last handoff will be saved with git stash.</div>}
+              {preview.willAdopt && <div>A folder with that name is already there without git. It becomes this repository if its files match; otherwise the send stops and lists the differences.</div>}
             </>
           )}
         </div>

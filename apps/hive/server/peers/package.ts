@@ -1,15 +1,14 @@
 /**
- * Session packages: everything another Hive needs to resume a session.
+ * Session handoff: everything another Hive needs to resume a session.
  *
+ * The transfer (see wire.ts) is a head — a zip of
  *   manifest.json
  *   transcript/<id>.jsonl          the Claude Code transcript
  *   transcript/<id>/**             subagent transcripts and tool results
- *   code/repo.bundle               commits the target doesn't have (optional)
- *   code/worktree.patch            uncommitted changes to tracked files
- *   code/untracked/**              untracked, non-ignored files
+ * — followed by the project's code as a git bundle (git-transfer.ts).
  *
- * exportSession() stops the session here and packs it; importSession() puts it
- * in place on this machine (paths rewritten) and optionally resumes it.
+ * exportSession() packs a stopped session; importSession() puts it in place on
+ * this machine (paths rewritten) and optionally resumes it.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,17 +20,13 @@ import { getSessionInfo, listLiveSessionHolders } from '../sessions/replay-clien
 import { destroyPtysForSession, getPtySession, spawnPty } from '../terminal-pty.js';
 import { isIncognitoSession, isIncognitoPath } from '../privacy/incognito.js';
 import { getProvider } from '../providers/registry.js';
-import { listLocalProjectPaths } from '../delivery/local-repos.js';
 import { TranscriptRewriter } from './transcript-rewrite.js';
-import {
-  TransferError, applyRepo, checkTarget, fingerprint, normalizeRemote, packRepo, repoState,
-  type CodePayload, type TargetCheck,
-} from './git-transfer.js';
-import { fingerprintsFor, getLock, previousRoot } from './store.js';
+import { TransferError, packRepo, repoState, tmpFile, type CodeInfo } from './git-transfer.js';
+import { getLock } from './store.js';
+import { prepareTarget, receiveCode, resolveTargetRoot, type PreparedTarget, type ProjectIdentity } from './projects.js';
 
 export const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-export const MAX_PACKAGE_BYTES = 200 * 1024 * 1024;
-const FORMAT = 1;
+const FORMAT = 2;
 
 export interface Manifest {
   format: number;
@@ -43,10 +38,7 @@ export interface Manifest {
   /** Session cwd relative to the root, '/'-separated ('' = the root). */
   cwdRel: string;
   projectName: string;
-  originUrl: string | null;
-  branch: string | null;
-  headSha: string | null;
-  hasBundle: boolean;
+  code: CodeInfo;
   /** Prompt to send when the session resumes on the target. */
   instruction?: string;
   /** Whether the target should resume the session right away. */
@@ -63,6 +55,7 @@ export interface SessionSource {
   cwdRel: string;
   projectName: string;
   originUrl: string | null;
+  rootCommit: string | null;
   branch: string | null;
   headSha: string | null;
 }
@@ -80,7 +73,8 @@ export async function describeSession(sessionId: string): Promise<SessionSource>
 
   const state = await repoState(info.cwd);
   if (!state.isRepo) {
-    throw new TransferError(400, 'Only sessions in a git repository can be handed off. Run `git init` and commit in the project first.');
+    throw new TransferError(400,
+      `${path.basename(info.cwd)} isn't a git repository yet. Make it one (Projects → Sync → "Make local git") and try again.`);
   }
   const rel = path.relative(state.root, path.resolve(info.cwd));
   const cwdRel = rel.startsWith('..') ? '' : rel.split(path.sep).join('/');
@@ -92,9 +86,14 @@ export async function describeSession(sessionId: string): Promise<SessionSource>
     cwdRel,
     projectName: path.basename(state.root),
     originUrl: state.originUrl,
+    rootCommit: state.rootCommit,
     branch: state.branch,
     headSha: state.headSha,
   };
+}
+
+export function sessionIdentity(src: SessionSource): ProjectIdentity & { sessionId: string } {
+  return { name: src.projectName, originUrl: src.originUrl, rootCommit: src.rootCommit, sessionId: src.sessionId };
 }
 
 /** Stop every process running this session here; fail if one outside Hive won't go. */
@@ -170,10 +169,11 @@ function addDir(zip: AdmZip, dir: string, prefix: string): void {
 }
 
 export interface ExportResult {
-  zip: Buffer;
+  /** Zip of manifest + transcript. */
+  head: Buffer;
+  /** Git bundle (temp file; caller deletes), or null when the target has everything. */
+  bundlePath: string | null;
   manifest: Manifest;
-  /** Working-tree fingerprint at export, recorded when the handoff completes. */
-  fingerprint: string;
   source: SessionSource;
 }
 
@@ -186,91 +186,46 @@ export async function exportSession(
   src: SessionSource,
   opts: { haveHead: string | null; instruction?: string; resume: boolean },
 ): Promise<ExportResult> {
-  const code = await packRepo(src.root, opts.haveHead, MAX_PACKAGE_BYTES);
-  const manifest: Manifest = {
-    format: FORMAT,
-    sessionId: src.sessionId,
-    provider: 'claude',
-    sourceRoot: src.root,
-    sourceWindows: isWindows,
-    cwdRel: src.cwdRel,
-    projectName: src.projectName,
-    originUrl: code.originUrl,
-    branch: code.branch,
-    headSha: code.headSha,
-    hasBundle: !!code.bundle,
-    instruction: opts.instruction?.trim() || undefined,
-    resume: opts.resume,
-    projectSettings: readProjectSettings(config, src.root),
-  };
-
-  const zip = new AdmZip();
-  zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2)));
-  zip.addFile(`transcript/${src.sessionId}.jsonl`, fs.readFileSync(src.jsonlPath));
-  addDir(zip, path.join(path.dirname(src.jsonlPath), src.sessionId), `transcript/${src.sessionId}/`);
-  if (code.bundle) zip.addFile('code/repo.bundle', code.bundle);
-  zip.addFile('code/worktree.patch', code.patch);
-  for (const f of code.untracked) zip.addFile(`code/untracked/${f.rel.split(path.sep).join('/')}`, f.data);
-
-  const buf = zip.toBuffer();
-  if (buf.length > MAX_PACKAGE_BYTES) {
-    throw new TransferError(413, 'The session package is over 200 MB. Clone the project on the other Hive first; then only new commits are sent.');
+  const bundlePath = tmpFile('.bundle');
+  try {
+    const code = await packRepo(src.root, opts.haveHead, bundlePath);
+    const manifest: Manifest = {
+      format: FORMAT,
+      sessionId: src.sessionId,
+      provider: 'claude',
+      sourceRoot: src.root,
+      sourceWindows: isWindows,
+      cwdRel: src.cwdRel,
+      projectName: src.projectName,
+      code,
+      instruction: opts.instruction?.trim() || undefined,
+      resume: opts.resume,
+      projectSettings: readProjectSettings(config, src.root),
+    };
+    const zip = new AdmZip();
+    zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2)));
+    zip.addFile(`transcript/${src.sessionId}.jsonl`, fs.readFileSync(src.jsonlPath));
+    addDir(zip, path.join(path.dirname(src.jsonlPath), src.sessionId), `transcript/${src.sessionId}/`);
+    if (!code.hasBundle) fs.rmSync(bundlePath, { force: true });
+    return { head: zip.toBuffer(), bundlePath: code.hasBundle ? bundlePath : null, manifest, source: src };
+  } catch (err) {
+    fs.rmSync(bundlePath, { force: true });
+    throw err;
   }
-  return { zip: buf, manifest, fingerprint: await fingerprint(src.root), source: src };
-}
-
-/** Where a project should live on this Hive. */
-export async function resolveTargetRoot(
-  config: HiveConfig,
-  m: Pick<Manifest, 'sessionId' | 'originUrl' | 'projectName'>,
-): Promise<string> {
-  const prev = previousRoot(m.sessionId);
-  if (prev && fs.existsSync(prev)) return prev;
-
-  const remote = normalizeRemote(m.originUrl);
-  if (remote) {
-    for (const p of listLocalProjectPaths(config)) {
-      const s = await repoState(p);
-      if (s.isRepo && path.resolve(s.root) === path.resolve(p) && normalizeRemote(s.originUrl) === remote) return p;
-    }
-  }
-
-  if (!config.projectsRoot) {
-    throw new TransferError(409, 'This Hive has no projects folder. Set one in Settings → General.');
-  }
-  const base = m.projectName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '-') || 'project';
-  for (let n = 1; ; n++) {
-    const candidate = path.join(config.projectsRoot, n === 1 ? base : `${base}-${n}`);
-    if (!fs.existsSync(candidate)) return candidate;
-    const s = await repoState(candidate);
-    // Same repo, or an empty folder: use it. Anything else is someone else's.
-    if (s.isRepo && remote && normalizeRemote(s.originUrl) === remote) return candidate;
-    if (!s.isRepo && fs.readdirSync(candidate).length === 0) return candidate;
-  }
-}
-
-export interface PrepareResult extends TargetCheck {
-  targetRoot: string;
-  launchFlags: { autoMode: boolean; dangerouslySkipPermissions: boolean };
 }
 
 /** What the target would do with this session — asked before anything is stopped. */
 export async function prepareImport(
   config: HiveConfig,
-  m: Pick<Manifest, 'sessionId' | 'originUrl' | 'projectName'>,
-): Promise<PrepareResult> {
-  if (!SESSION_ID.test(m.sessionId)) throw new TransferError(400, 'Invalid session id');
-  const targetRoot = await resolveTargetRoot(config, m);
-  const check = await checkTarget(targetRoot, fingerprintsFor(targetRoot));
-  if (check.exists && !check.isRepo && check.dirty) {
-    throw new TransferError(409, `${targetRoot} exists on this Hive and is not that git repository.`);
-  }
-  if (check.dirty && !check.dirtyIsOurs) {
-    throw new TransferError(409, `${targetRoot} has uncommitted changes on this Hive. Commit or stash them there first.`);
+  id: ProjectIdentity & { sessionId: string },
+): Promise<PreparedTarget & { launchFlags: { autoMode: boolean; dangerouslySkipPermissions: boolean } }> {
+  if (!SESSION_ID.test(id.sessionId)) throw new TransferError(400, 'Invalid session id');
+  const prepared = await prepareTarget(config, id);
+  if (prepared.busy) {
+    throw new TransferError(409, `Another terminal or session is running in ${prepared.targetRoot} on this Hive. Close it there first.`);
   }
   return {
-    ...check,
-    targetRoot,
+    ...prepared,
     launchFlags: {
       autoMode: !!config.launchFlags?.autoMode,
       dangerouslySkipPermissions: !!config.launchFlags?.dangerouslySkipPermissions,
@@ -296,7 +251,7 @@ function readManifest(zip: AdmZip): Manifest {
   const entry = zip.getEntry('manifest.json');
   if (!entry) throw new TransferError(400, 'Not a session package (no manifest)');
   const m = JSON.parse(entry.getData().toString('utf-8')) as Manifest;
-  if (m.format !== FORMAT) throw new TransferError(400, `Unsupported package format ${m.format}. Update both Hives.`);
+  if (m.format !== FORMAT) throw new TransferError(400, `Unsupported package format ${m.format}. Update SI Hive on both machines.`);
   if (!SESSION_ID.test(m.sessionId)) throw new TransferError(400, 'Invalid session id');
   return m;
 }
@@ -318,33 +273,25 @@ function removeOtherCopies(projectsDir: string, sessionId: string, keepDir: stri
 
 export async function importSession(
   config: HiveConfig,
-  data: Buffer,
+  head: Buffer,
+  bundlePath: string | null,
   terminalIdsFor: (sessionId: string) => string[],
 ): Promise<{ manifest: Manifest; result: ImportResult }> {
   let zip: AdmZip;
-  try { zip = new AdmZip(data); } catch { throw new TransferError(400, 'Not a session package (bad zip)'); }
+  try { zip = new AdmZip(head); } catch { throw new TransferError(400, 'Not a session package (bad zip)'); }
   const m = readManifest(zip);
 
   // A stale copy may be open here; the incoming one supersedes it.
   await stopSession(m.sessionId, terminalIdsFor(m.sessionId));
 
-  const targetRoot = await resolveTargetRoot(config, m);
+  const targetRoot = await resolveTargetRoot(config, {
+    name: m.projectName, originUrl: m.code.originUrl, rootCommit: m.code.rootCommit, sessionId: m.sessionId,
+  });
   if (isIncognitoPath(targetRoot)) throw new TransferError(403, `${targetRoot} is incognito on this Hive.`);
   const targetCwd = m.cwdRel ? path.join(targetRoot, ...m.cwdRel.split('/')) : targetRoot;
 
   // 1. Code.
-  const prefix = 'code/untracked/';
-  const payload: CodePayload = {
-    branch: m.branch,
-    headSha: m.headSha,
-    originUrl: m.originUrl,
-    bundle: m.hasBundle ? zip.getEntry('code/repo.bundle')?.getData() : undefined,
-    patch: zip.getEntry('code/worktree.patch')?.getData() ?? Buffer.alloc(0),
-    untracked: zip.getEntries()
-      .filter((e) => !e.isDirectory && e.entryName.startsWith(prefix))
-      .map((e) => ({ rel: e.entryName.slice(prefix.length), data: e.getData() })),
-  };
-  const notes = await applyRepo(targetRoot, payload, fingerprintsFor(targetRoot));
+  const notes = await receiveCode(targetRoot, bundlePath, m.code, m.sessionId);
   fs.mkdirSync(targetCwd, { recursive: true });
 
   // 2. Transcript, under the folder Claude will look in for targetCwd.
@@ -357,8 +304,7 @@ export async function importSession(
     { root: targetRoot, windows: isWindows },
   );
   const tPrefix = 'transcript/';
-  const subDir = path.join(destDir, m.sessionId);
-  fs.rmSync(subDir, { recursive: true, force: true });
+  fs.rmSync(path.join(destDir, m.sessionId), { recursive: true, force: true });
   for (const e of zip.getEntries()) {
     if (e.isDirectory || !e.entryName.startsWith(tPrefix)) continue;
     const rel = e.entryName.slice(tPrefix.length);
@@ -382,11 +328,8 @@ export async function importSession(
   let resumed = false;
   if (m.resume && !getPtySession(m.sessionId)) {
     const provider = getProvider('claude');
-    const customPath = (config.aiProviders as Record<string, { customPath?: string }> | undefined)?.claude?.customPath;
-    const args = [
-      ...provider.resumeArgs(m.sessionId),
-      ...permissionFlags(config),
-    ];
+    const customPath = config.aiProviders?.providers?.claude?.customPath;
+    const args = [...provider.resumeArgs(m.sessionId), ...permissionFlags(config)];
     if (m.instruction) args.push(m.instruction);
     await spawnPty(m.sessionId, targetCwd, 120, 30, provider.exePath(customPath), args, 'claude');
     resumed = true;

@@ -65,6 +65,7 @@ import { registerEventTrackRoutes } from './admin/event-track-routes.js';
 import { registerNowRoutes } from './now/routes.js';
 import { registerHandoffRoutes } from './handoff/routes.js';
 import { registerPeerRoutes, resumeBlockedReason } from './peers/routes.js';
+import { startAutoSync as startPeerAutoSync } from './peers/sync.js';
 import { registerSearchRoutes } from './search/routes.js';
 import { registerReviewRoutes } from './reviews/routes.js';
 import { checkForUpdates, applyUpdates, getChangelog, PUBLIC_GITHUB, parseGitHubRepo } from './updater.js';
@@ -259,6 +260,9 @@ aggregator.on('sessions_updated', () => {
 const scheduler = new Scheduler();
 scheduler.setConfig(config);
 scheduler.start();
+
+// Peer Hives: background project sync for peers that opted in (no-op otherwise)
+startPeerAutoSync();
 
 // Create and start notifier
 const notifier = new Notifier(aggregator, config.notifications ?? { macOS: true, browser: true });

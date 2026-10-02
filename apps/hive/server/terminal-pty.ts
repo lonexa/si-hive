@@ -947,6 +947,22 @@ export function destroyPtysForSession(sessionId: string, knownIds: Iterable<stri
   return killed;
 }
 
+/** Ids of live PTYs whose working directory is `dir` or inside it. */
+export function livePtysUnder(dir: string): string[] {
+  const norm = (p: string) => {
+    const r = path.resolve(p).replace(/[\\/]+$/, '');
+    return isWindows ? r.toLowerCase() : r;
+  };
+  const root = norm(dir);
+  const ids: string[] = [];
+  for (const [id, session] of activeSessions) {
+    if (session.exited) continue;
+    const cwd = norm(session.cwd);
+    if (cwd === root || cwd.startsWith(root + path.sep)) ids.push(id);
+  }
+  return ids;
+}
+
 /** Kill every PTY whose working directory is `dir` or inside it. Returns how many were killed. */
 export function destroyPtysUnder(dir: string): number {
   const norm = (p: string) => {
