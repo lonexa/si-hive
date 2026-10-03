@@ -14,8 +14,8 @@ import type { ProviderId } from '@/lib/launch-flags';
  * renders or resizes it (a shared terminal can only have one size, and every
  * resize made the CLI redraw badly on the desktop). Instead it shows the
  * conversation from the session transcript, a peek at the bottom of the live
- * screen, choice keys while the CLI is asking something, and a text box that
- * types into the same running session.
+ * screen, the menu's options as buttons while the CLI is asking something,
+ * and a text box that types into the same running session.
  */
 
 interface TranscriptMessage {
@@ -28,6 +28,7 @@ interface TranscriptMessage {
 
 type Item =
   | { kind: 'text'; key: string; role: string; text: string }
+  | { kind: 'question'; key: string; text: string }
   | { kind: 'tools'; key: string; tools: TranscriptMessage[] }
   | { kind: 'note'; key: string; text: string };
 
@@ -42,23 +43,72 @@ interface Props {
   account?: string;
 }
 
-const CHOICE_KEYS: { label: string; data: string }[] = [
-  { label: '1', data: '1' },
-  { label: '2', data: '2' },
-  { label: '3', data: '3' },
+const NAV_KEYS: { label: string; data: string }[] = [
   { label: '↑', data: '\x1b[A' },
   { label: '↓', data: '\x1b[B' },
+  { label: 'Tab', data: '\t' },
   { label: 'Enter', data: '\r' },
 ];
+const FALLBACK_OPTIONS = ['1', '2', '3', '4'].map((n) => ({ num: n, label: n, current: false }));
 const ESC = '\x1b';
 const PEEK_LINES = 14;
+// Tools that put a menu on screen and wait for the person to pick.
+const INPUT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
-/** A real choice menu: a line starting with "❯ 1." followed by more numbered options. */
-function isChoicePrompt(lines: string[]): boolean {
-  const tail = lines.slice(-12);
-  const cursor = tail.findIndex((l) => /^\s{0,6}❯\s*\d+\.\s/.test(l));
-  if (cursor === -1) return false;
-  return tail.some((l, i) => i !== cursor && /^\s{0,8}\d+\.\s/.test(l));
+interface Menu {
+  /** Screen lines from the question down to the footer. */
+  lines: string[];
+  options: { num: string; label: string; current: boolean }[];
+  /** Number of the free-text option ("Type something."), if the menu has one. */
+  typeOption?: string;
+}
+
+// Optional box border, optional cursor, then "N. label". Claude draws the
+// cursor as ❯, Codex as ›.
+const OPTION_RE = /^[\s│┃|]*(?:([❯›>])\s*)?(\d+)\.\s+(.*?)[\s│┃|]*$/;
+
+/**
+ * Find a choice menu on screen (permission prompt, AskUserQuestion, plan
+ * approval): a cursor on a numbered option plus at least one other numbered
+ * option. Questions with several described options run 15+ lines, so this
+ * scans the whole screen, not just the peek.
+ */
+function findMenu(screenLines: string[]): Menu | null {
+  let cursor = -1;
+  for (let i = screenLines.length - 1; i >= Math.max(0, screenLines.length - 30); i--) {
+    const m = OPTION_RE.exec(screenLines[i]);
+    if (m?.[1]) { cursor = i; break; }
+  }
+  if (cursor === -1) return null;
+  // The menu's options: numbered lines above the cursor, with indented
+  // descriptions and blank lines between them. Stop at the question or a rule.
+  let start = cursor;
+  for (let i = cursor - 1; i >= Math.max(0, cursor - 30); i--) {
+    const line = screenLines[i];
+    if (OPTION_RE.test(line)) start = i;
+    else if (line.trim() && !/^[\s│┃|]{3,}\S/.test(line)) break;
+  }
+  const byNum = new Map<string, { num: string; label: string; current: boolean }>();
+  for (let i = start; i < screenLines.length; i++) {
+    const m = OPTION_RE.exec(screenLines[i]);
+    if (m) byNum.set(m[2], { num: m[2], label: m[3], current: !!m[1] });
+  }
+  if (byNum.size < 2) return null;
+  // Show the question above the options too, back to the rule that opens the menu.
+  let top = start;
+  while (top > 0 && start - top < 12 && !/^\s*[─━-]{10,}/.test(screenLines[top - 1])) top--;
+  const options = [...byNum.values()];
+  const typeOption = options.find((o) => /^(\[.\]\s*)?Type something/i.test(o.label))?.num;
+  return { lines: screenLines.slice(top), options, typeOption };
+}
+
+/** The question text from an AskUserQuestion call, for the chat list. */
+function questionText(m: TranscriptMessage): string {
+  const c = (m.content ?? {}) as { questions?: { question?: string; options?: { label?: string }[] }[]; plan?: string };
+  if (m.toolName === 'ExitPlanMode') return typeof c.plan === 'string' ? c.plan : 'Plan ready for approval';
+  return (c.questions ?? [])
+    .map((q) => [`**${q.question ?? ''}**`, ...(q.options ?? []).map((o, i) => `${i + 1}. ${o.label ?? ''}`)].join('\n'))
+    .join('\n\n');
 }
 
 function toolSummary(m: TranscriptMessage): string {
@@ -73,7 +123,10 @@ function toolSummary(m: TranscriptMessage): string {
 function toItems(messages: TranscriptMessage[]): Item[] {
   const items: Item[] = [];
   messages.forEach((m, i) => {
-    if (m.type === 'tool_use') {
+    if (m.type === 'tool_use' && m.toolName && INPUT_TOOLS.has(m.toolName)) {
+      const text = questionText(m);
+      if (text) items.push({ kind: 'question', key: `q${i}`, text });
+    } else if (m.type === 'tool_use') {
       const last = items[items.length - 1];
       if (last?.kind === 'tools') last.tools.push(m);
       else items.push({ kind: 'tools', key: `t${i}`, tools: [m] });
@@ -122,7 +175,7 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
   const [connected, setConnected] = useState(false);
   const [peek, setPeek] = useState<string[]>([]);
   const [peekOpen, setPeekOpen] = useState(false);
-  const [asking, setAsking] = useState(false);
+  const [menu, setMenu] = useState<Menu | null>(null);
   const [text, setText] = useState('');
   const [atBottom, setAtBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
@@ -149,9 +202,8 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
       const lines: string[] = [];
       for (let y = 0; y < screen.rows; y++) lines.push(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '');
       while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-      const shown = lines.slice(-PEEK_LINES);
-      setPeek(shown);
-      setAsking(isChoicePrompt(shown));
+      setPeek(lines);
+      setMenu(findMenu(lines));
     };
     const onActivity = () => {
       if (!peekTimer) peekTimer = setTimeout(refreshPeek, 250);
@@ -198,6 +250,13 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
   }, [sessionId]);
 
   const items = useMemo(() => toItems(messages), [messages]);
+  // The transcript says Claude is waiting on a question even when the menu
+  // couldn't be read off the screen: still offer the keys.
+  const pendingQuestion = useMemo(() => {
+    const last = messages[messages.length - 1];
+    return last?.type === 'tool_use' && !!last.toolName && INPUT_TOOLS.has(last.toolName);
+  }, [messages]);
+  const asking = !!menu || pendingQuestion;
 
   const scrollToBottom = () => {
     const el = listRef.current;
@@ -220,13 +279,26 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
     const value = text.trim();
     if (!value || !connected) return;
     // Paste as one block so newlines don't submit early, then press Enter.
-    sendRaw(provider === 'codex' ? value : `\x1b[200~${value}\x1b[201~`);
-    setTimeout(() => sendRaw('\r'), 150);
+    const type = () => {
+      sendRaw(provider === 'codex' ? value : `\x1b[200~${value}\x1b[201~`);
+      setTimeout(() => sendRaw('\r'), 150);
+    };
+    // A menu ignores typing (and Enter would pick the highlighted option).
+    // Answer through its free-text option, or dismiss the menu and say it.
+    if (menu?.typeOption) { sendRaw(menu.typeOption); setTimeout(type, 250); }
+    else if (menu) { sendRaw(ESC); setTimeout(type, 500); }
+    else type();
     setText('');
     scrollToBottom();
   };
 
+  const screenRef = useRef<HTMLPreElement>(null);
   const showScreen = asking || peekOpen;
+  const screenLines = menu ? menu.lines : peek.slice(-PEEK_LINES);
+  useEffect(() => {
+    const el = screenRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [screenLines.length, showScreen]);
 
   return (
     // Full-screen over the app chrome: every pixel matters on a phone.
@@ -257,6 +329,10 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
           {items.map((it) =>
             it.kind === 'tools' ? (
               <ToolsRow key={it.key} tools={it.tools} />
+            ) : it.kind === 'question' ? (
+              <div key={it.key} className={cn(MARKDOWN_CLASSES, 'rounded-lg border border-yellow-500/40 bg-yellow-500/5 px-3 py-2 text-sm text-foreground')}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
+              </div>
             ) : it.kind === 'note' ? (
               <div key={it.key} className="truncate text-center text-[11px] italic text-muted-foreground">{it.text}</div>
             ) : it.role === 'user' ? (
@@ -281,21 +357,37 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
         )}
       </div>
 
-      {showScreen && peek.length > 0 && (
+      {showScreen && screenLines.length > 0 && (
         <div className="shrink-0 border-t border-border bg-black">
-          {asking && <div className="px-3 pt-1.5 text-[11px] text-yellow-400">Claude is asking — pick an option below</div>}
-          <pre className="max-h-36 overflow-auto px-3 py-1.5 font-mono text-[10px] leading-snug text-zinc-200">{peek.join('\n')}</pre>
+          {asking && <div className="px-3 pt-1.5 text-[11px] text-yellow-400">Claude is asking — tap an option, or type your own answer below</div>}
+          <pre ref={screenRef} className={cn('overflow-auto px-3 py-1.5 font-mono text-[10px] leading-snug text-zinc-200', asking ? 'max-h-[35dvh]' : 'max-h-36')}>{screenLines.join('\n')}</pre>
         </div>
       )}
 
       {asking ? (
-        <div className="shrink-0 flex gap-1.5 overflow-x-auto border-t border-border px-2 py-1.5">
-          {CHOICE_KEYS.map((k) => (
-            <Button key={k.label} variant="outline" size="sm" className="h-9 min-w-11 shrink-0 px-2 text-sm" onClick={() => sendRaw(k.data)}>
-              {k.label}
-            </Button>
-          ))}
-          <Button variant="outline" size="sm" className="h-9 shrink-0 px-2 text-sm" onClick={() => sendRaw(ESC)}>Esc</Button>
+        <div className="shrink-0 space-y-1.5 border-t border-border px-2 py-1.5">
+          <div className="flex flex-wrap gap-1.5">
+            {(menu?.options ?? FALLBACK_OPTIONS).map((o) => (
+              <Button
+                key={o.num}
+                variant={o.current ? 'secondary' : 'outline'}
+                size="sm"
+                className="h-9 max-w-full justify-start truncate px-2.5 text-sm"
+                disabled={!connected}
+                onClick={() => sendRaw(o.num)}
+              >
+                {o.label === o.num ? o.num : `${o.num}. ${o.label}`}
+              </Button>
+            ))}
+          </div>
+          <div className="flex gap-1.5 overflow-x-auto">
+            {NAV_KEYS.map((k) => (
+              <Button key={k.label} variant="ghost" size="sm" className="h-8 min-w-10 shrink-0 px-2 text-xs" disabled={!connected} onClick={() => sendRaw(k.data)}>
+                {k.label}
+              </Button>
+            ))}
+            <Button variant="ghost" size="sm" className="h-8 shrink-0 px-2 text-xs" disabled={!connected} onClick={() => sendRaw(ESC)}>Esc</Button>
+          </div>
         </div>
       ) : (
         <div className="shrink-0 flex items-center justify-between border-t border-border px-2 py-1">
@@ -323,7 +415,7 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
           value={text}
           onChange={(e) => setText(e.target.value)}
           rows={Math.min(5, Math.max(1, text.split('\n').length))}
-          placeholder={connected ? 'Message Claude…' : 'Connecting…'}
+          placeholder={!connected ? 'Connecting…' : asking ? 'Or type your own answer…' : 'Message Claude…'}
           className="min-h-10 flex-1 resize-none rounded-2xl border border-border bg-background px-3 py-2 text-base text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
         />
         <Button size="sm" className="h-10 w-10 shrink-0 rounded-full p-0" onClick={sendMessage} disabled={!connected || !text.trim()} aria-label="Send">
