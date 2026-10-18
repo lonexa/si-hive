@@ -163,9 +163,13 @@ export default function MobileLayout() {
       </main>
       <TabBar />
       <IncomingBanner />
-      <div className="mobile-lift">
-        <MessagesWidget />
-      </div>
+      {/* Full-screen pages (a session, chat) keep their keys and text box at
+          the bottom, right where the floating button would sit. */}
+      {!fullBleed && (
+        <div className="mobile-lift">
+          <MessagesWidget />
+        </div>
+      )}
     </div>
   );
 }
