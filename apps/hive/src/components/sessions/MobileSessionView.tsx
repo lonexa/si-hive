@@ -127,7 +127,7 @@ function findMode(screenLines: string[]): string {
 
 // What the CLI is busy with: Claude's spinner line ("✻ Cogitating… (12s ·
 // esc to interrupt)"), else any line offering to interrupt (Codex).
-const SPINNER_RE = /^\s*[✻✽✶✳✢·*✺●•]\s+\S.*…/;
+const SPINNER_RE = /^\s*[^\w\s│┃─>❯›⎿]\s+[A-Z]\S*…/;
 const INTERRUPT_RE = /esc to interrupt/i;
 
 function findStatus(screenLines: string[]): string | null {
@@ -425,7 +425,8 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
   // Shift+Tab cycles Claude's permission modes (default, accept edits, plan, …).
   const canCycleMode = !provider || provider === 'claude';
   const mode = useMemo(() => findMode(peek), [peek]);
-  const status = useMemo(() => (asking ? null : findStatus(peek)), [peek, asking]);
+  // Hidden in the live view, which already shows the spinner.
+  const status = useMemo(() => (asking || liveOpen ? null : findStatus(peek)), [peek, asking, liveOpen]);
 
   // While asking, the question on screen sits above the answer buttons,
   // unless the live view already shows the whole screen.
