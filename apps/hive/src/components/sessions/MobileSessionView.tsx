@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Terminal } from '@xterm/xterm';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowDown, ArrowLeft, ChevronDown, ChevronRight, Monitor, Repeat, Send, Square, Wrench } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ChevronDown, ChevronRight, MessageSquare, Monitor, Repeat, Send, Square, WrapText, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { API_BASE, WS_BASE } from '@/lib/api-config';
@@ -14,9 +14,10 @@ import { useAutoGrow, useKeyboardViewport } from '@/hooks/useMobileKeyboard';
  * Phone view of a session. The desktop owns the terminal; the phone never
  * renders or resizes it (a shared terminal can only have one size, and every
  * resize made the CLI redraw badly on the desktop). Instead it shows the
- * conversation from the session transcript, a peek at the bottom of the live
- * screen, the menu's options as buttons while the CLI is asking something,
- * and a text box that types into the same running session.
+ * conversation from the session transcript, the live screen (full-screen,
+ * wrapped to the phone's width, with scrollback), the menu's options as
+ * buttons while the CLI is asking something, and a text box that types into
+ * the same running session.
  */
 
 interface TranscriptMessage {
@@ -53,7 +54,8 @@ const NAV_KEYS: { label: string; data: string }[] = [
 const FALLBACK_OPTIONS = ['1', '2', '3', '4'].map((n) => ({ num: n, label: n, current: false }));
 const ESC = '\x1b';
 const SHIFT_TAB = '\x1b[Z';
-const PEEK_LINES = 14;
+// Lines kept above the screen for the live view (the server replays 256 KB).
+const SCROLLBACK = 1000;
 // Tools that put a menu on screen and wait for the person to pick.
 const INPUT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
 
@@ -121,6 +123,67 @@ function findMode(screenLines: string[]): string {
     if (m) return MODE_LABELS[m[1].toLowerCase()] ?? m[1];
   }
   return 'Default';
+}
+
+// What the CLI is busy with: Claude's spinner line ("✻ Cogitating… (12s ·
+// esc to interrupt)"), else any line offering to interrupt (Codex).
+const SPINNER_RE = /^\s*[✻✽✶✳✢·*✺●•]\s+\S.*…/;
+const INTERRUPT_RE = /esc to interrupt/i;
+
+function findStatus(screenLines: string[]): string | null {
+  const from = Math.max(0, screenLines.length - 15);
+  for (const re of [SPINNER_RE, INTERRUPT_RE]) {
+    for (let i = screenLines.length - 1; i >= from; i--) {
+      if (re.test(screenLines[i])) return screenLines[i].replace(/[\s│┃]+$/, '').trim();
+    }
+  }
+  return null;
+}
+
+// A line drawn only with rules and box corners: clipped, never wrapped.
+const RULE_RE = /^[\s─━═╌┄╭╮╰╯┌┐└┘├┤┬┴┼│┃-]+$/;
+
+function trimTrailingBlank(lines: string[]): string[] {
+  let end = lines.length;
+  while (end && !lines[end - 1].trim()) end--;
+  return end === lines.length ? lines : lines.slice(0, end);
+}
+
+/**
+ * The terminal as text the phone can read. Wrapped, each line drops its
+ * right-hand box borders (padding plus "│") so it doesn't spill onto a
+ * second line of blanks; unwrapped, it scrolls sideways like the desktop.
+ */
+function LiveScreen({ lines, wrap }: { lines: string[]; wrap: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [lines, wrap]);
+  return (
+    <div
+      ref={ref}
+      className="h-full overflow-auto overscroll-contain bg-black px-2 py-2 font-mono text-[11px] leading-snug text-zinc-200"
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+      }}
+    >
+      {lines.length === 0 && <div className="py-8 text-center font-sans text-xs text-muted-foreground">Nothing on screen yet.</div>}
+      <div className={wrap ? undefined : 'w-max'}>
+        {lines.map((line, i) =>
+          wrap ? (
+            <div key={i} className={RULE_RE.test(line) ? 'overflow-hidden whitespace-pre' : 'whitespace-pre-wrap break-words'}>
+              {line.replace(/(\s+[│┃])+\s*$/, '') || ' '}
+            </div>
+          ) : (
+            <div key={i} className="whitespace-pre">{line || ' '}</div>
+          ),
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** The question text from an AskUserQuestion call, for the chat list. */
@@ -195,8 +258,12 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
   const navigate = useNavigate();
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [connected, setConnected] = useState(false);
+  // The visible screen (menu, mode, status are read off it) and the screen
+  // plus scrollback (the live view).
   const [peek, setPeek] = useState<string[]>([]);
-  const [peekOpen, setPeekOpen] = useState(false);
+  const [history, setHistory] = useState<string[]>([]);
+  const [liveOpen, setLiveOpen] = useState(false);
+  const [wrap, setWrap] = useState(true);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [text, setText] = useState('');
   const [typing, setTyping] = useState(false);
@@ -207,27 +274,50 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
   const listRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
 
+  // Transcripts run to megabytes, so after the first load only new messages
+  // are fetched, one request at a time.
+  const transcript = useRef({ file: '', total: 0, busy: false, again: false });
   const loadTranscript = useCallback(() => {
-    fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/transcript`, { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : { messages: [] }))
-      .then((d: { messages?: TranscriptMessage[] }) => setMessages(d.messages ?? []))
-      .catch(() => { /* keep what we have */ });
+    const t = transcript.current;
+    if (t.busy) { t.again = true; return; }
+    t.busy = true;
+    fetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}/transcript?from=${t.total}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { messages?: TranscriptMessage[]; from?: number; total?: number; file?: string } | null) => {
+        if (!d?.messages) return;
+        const page = d.messages;
+        // Started over (first load, or the transcript was replaced/shrank).
+        const fresh = !d.from || d.file !== t.file;
+        t.file = d.file ?? '';
+        t.total = d.total ?? (d.from ?? 0) + page.length;
+        if (fresh) setMessages((prev) => (prev.length || page.length ? page : prev));
+        else if (page.length) setMessages((prev) => [...prev, ...page]);
+      })
+      .catch(() => { /* keep what we have */ })
+      .finally(() => {
+        t.busy = false;
+        if (t.again) { t.again = false; loadTranscript(); }
+      });
   }, [sessionId]);
 
   // Live connection: attach to (or start) the session's terminal. Output feeds
-  // an off-screen terminal emulator so we can show the bottom of the screen.
+  // an off-screen terminal emulator that the live view and menu are read from.
   useEffect(() => {
+    transcript.current = { file: '', total: 0, busy: false, again: false };
     loadTranscript();
-    const screen = new Terminal({ cols: 120, rows: 40, scrollback: 0, allowProposedApi: true });
+    // Messages can land in the transcript after the screen goes quiet.
+    const poll = setInterval(loadTranscript, 8000);
+    const screen = new Terminal({ cols: 120, rows: 40, scrollback: SCROLLBACK, allowProposedApi: true });
     let peekTimer: ReturnType<typeof setTimeout> | null = null;
     let transcriptTimer: ReturnType<typeof setTimeout> | null = null;
     const refreshPeek = () => {
       peekTimer = null;
       const buf = screen.buffer.active;
-      const lines: string[] = [];
-      for (let y = 0; y < screen.rows; y++) lines.push(buf.getLine(buf.baseY + y)?.translateToString(true) ?? '');
-      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      const all: string[] = [];
+      for (let y = 0; y < buf.length; y++) all.push(buf.getLine(y)?.translateToString(true) ?? '');
+      const lines = trimTrailingBlank(all.slice(buf.baseY));
       setPeek(lines);
+      setHistory(trimTrailingBlank(all));
       setMenu(findMenu(lines));
     };
     const onActivity = () => {
@@ -263,6 +353,7 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
 
     return () => {
       closed = true;
+      clearInterval(poll);
       if (retry) clearTimeout(retry);
       if (peekTimer) clearTimeout(peekTimer);
       if (transcriptTimer) clearTimeout(transcriptTimer);
@@ -293,7 +384,21 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
   // Keep the list pinned to the newest message unless the user scrolled up.
   useEffect(() => {
     if (stickToBottom.current) scrollToBottom();
-  }, [items]);
+  }, [items, liveOpen]);
+
+  // A question or plan waiting on an answer is read from its top, not its end.
+  const lastItem = items[items.length - 1];
+  const questionKey = asking && lastItem?.kind === 'question' ? lastItem.key : null;
+  const questionRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = questionRef.current;
+    const list = listRef.current;
+    if (!questionKey || !el || !list || liveOpen) return;
+    if (el.offsetHeight <= list.clientHeight) return;
+    list.scrollTop = el.offsetTop - 8;
+    stickToBottom.current = false;
+    setAtBottom(false);
+  }, [questionKey, liveOpen]);
 
   const sendRaw = (data: string) => {
     const ws = wsRef.current;
@@ -320,14 +425,17 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
   // Shift+Tab cycles Claude's permission modes (default, accept edits, plan, …).
   const canCycleMode = !provider || provider === 'claude';
   const mode = useMemo(() => findMode(peek), [peek]);
+  const status = useMemo(() => (asking ? null : findStatus(peek)), [peek, asking]);
 
+  // While asking, the question on screen sits above the answer buttons,
+  // unless the live view already shows the whole screen.
   const screenRef = useRef<HTMLPreElement>(null);
-  const showScreen = asking || peekOpen;
-  const screenLines = menu ? menu.lines : peek.slice(-PEEK_LINES);
+  const showMenuBox = asking && !liveOpen;
+  const menuLines = menu ? menu.lines : peek.slice(-14);
   useEffect(() => {
     const el = screenRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [screenLines.length, showScreen]);
+  }, [menuLines.length, showMenuBox]);
 
   return (
     // Full-screen over the app chrome: every pixel matters on a phone. Sized
@@ -345,6 +453,20 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
       </div>
 
       <div className="relative flex-1 min-h-0">
+        {liveOpen && (
+          <div className="absolute inset-0 z-10 flex flex-col bg-black">
+            <div className="shrink-0 flex items-center gap-2 border-b border-border px-2 py-1 text-[11px] text-muted-foreground">
+              <Monitor className="h-3.5 w-3.5" />
+              <span className="flex-1">Live screen</span>
+              <button type="button" className={cn('flex items-center gap-1 rounded px-2 py-1', wrap && 'text-foreground')} onClick={() => setWrap(!wrap)}>
+                <WrapText className="h-3.5 w-3.5" /> Wrap
+              </button>
+            </div>
+            <div className="flex-1 min-h-0">
+              <LiveScreen lines={history} wrap={wrap} />
+            </div>
+          </div>
+        )}
         <div
           ref={listRef}
           className="h-full overflow-y-auto overscroll-contain px-3 py-3 space-y-3"
@@ -360,7 +482,7 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
             it.kind === 'tools' ? (
               <ToolsRow key={it.key} tools={it.tools} />
             ) : it.kind === 'question' ? (
-              <div key={it.key} className={cn(MARKDOWN_CLASSES, 'rounded-lg border border-yellow-500/40 bg-yellow-500/5 px-3 py-2 text-sm text-foreground')}>
+              <div key={it.key} ref={it.key === questionKey ? questionRef : undefined} className={cn(MARKDOWN_CLASSES, 'rounded-lg border border-yellow-500/40 bg-yellow-500/5 px-3 py-2 text-sm text-foreground')}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{it.text}</ReactMarkdown>
               </div>
             ) : it.kind === 'note' ? (
@@ -376,7 +498,7 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
             ),
           )}
         </div>
-        {!atBottom && (
+        {!atBottom && !liveOpen && (
           <button
             type="button"
             onClick={scrollToBottom}
@@ -387,11 +509,25 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
         )}
       </div>
 
-      {showScreen && screenLines.length > 0 && (
+      {showMenuBox && menuLines.length > 0 && (
         <div className="shrink-0 border-t border-border bg-black">
-          {asking && <div className="px-3 pt-1.5 text-[11px] text-yellow-400">Claude is asking — tap an option, or type your own answer below</div>}
-          <pre ref={screenRef} className={cn('overflow-auto px-3 py-1.5 font-mono text-[10px] leading-snug text-zinc-200', asking ? 'max-h-[35dvh]' : 'max-h-36')}>{screenLines.join('\n')}</pre>
+          <div className="px-3 pt-1.5 text-[11px] text-yellow-400">Claude is asking — tap an option, or type your own answer below</div>
+          {/* The question card in the list carries the full text: keep this short. */}
+          <pre ref={screenRef} className={cn('overflow-auto whitespace-pre-wrap break-words px-3 py-1.5 font-mono text-[10px] leading-snug text-zinc-200', questionKey ? 'max-h-[18dvh]' : 'max-h-[35dvh]')}>
+            {menuLines.map((l) => (RULE_RE.test(l) ? '' : l.replace(/(\s+[│┃])+\s*$/, ''))).join('\n').replace(/\n{3,}/g, '\n\n')}
+          </pre>
         </div>
+      )}
+
+      {status && !liveOpen && (
+        <button
+          type="button"
+          className="shrink-0 flex items-center gap-2 border-t border-border px-3 py-1 text-left text-[11px] text-muted-foreground"
+          onClick={() => setLiveOpen(true)}
+        >
+          <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-primary" />
+          <span className="min-w-0 truncate font-mono">{status}</span>
+        </button>
       )}
 
       {asking ? (
@@ -420,16 +556,19 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
             {canCycleMode && (
               <Button variant="ghost" size="sm" className="h-8 shrink-0 px-2 text-xs" disabled={!connected} onClick={() => sendRaw(SHIFT_TAB)}>Shift+Tab</Button>
             )}
+            <Button variant="ghost" size="sm" className={cn('h-8 shrink-0 px-2 text-xs', liveOpen && 'text-primary')} onClick={() => setLiveOpen(!liveOpen)}>
+              {liveOpen ? 'Chat' : 'Screen'}
+            </Button>
           </div>
         </div>
       ) : (
         <div className="shrink-0 flex items-center justify-between border-t border-border px-2 py-1">
           <button
             type="button"
-            className={cn('flex items-center gap-1.5 rounded px-2 py-1 text-xs', peekOpen ? 'text-foreground' : 'text-muted-foreground')}
-            onClick={() => setPeekOpen(!peekOpen)}
+            className={cn('flex items-center gap-1.5 rounded px-2 py-1 text-xs', liveOpen ? 'text-primary' : 'text-muted-foreground')}
+            onClick={() => setLiveOpen(!liveOpen)}
           >
-            <Monitor className="h-3.5 w-3.5" /> Live screen
+            {liveOpen ? <><MessageSquare className="h-3.5 w-3.5" /> Chat</> : <><Monitor className="h-3.5 w-3.5" /> Live screen</>}
           </button>
           {canCycleMode && (
             <button

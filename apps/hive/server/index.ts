@@ -779,10 +779,10 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
-  // GET /api/sessions/:sessionId/transcript
+  // GET /api/sessions/:sessionId/transcript[?from=N]
   const transcriptMatch = /^\/api\/sessions\/([^/]+)\/transcript$/.exec(url.pathname);
   if (transcriptMatch && req.method === 'GET') {
-    handleGetTranscript(transcriptMatch[1], res);
+    handleGetTranscript(transcriptMatch[1], res, Number(url.searchParams.get('from')) || 0);
     return;
   }
 
@@ -2649,7 +2649,11 @@ function handlePatchConfig(req: http.IncomingMessage, res: http.ServerResponse):
 
 // --- Session Transcript Handler ---
 
-function handleGetTranscript(sessionId: string, res: http.ServerResponse): void {
+/**
+ * `from` skips the first N messages so a poller (the phone) only downloads
+ * what's new. `total` and `file` let it notice the transcript was replaced.
+ */
+function handleGetTranscript(sessionId: string, res: http.ServerResponse, from = 0): void {
   const filePath = aggregator.getSessionFilePath(sessionId);
   if (!filePath) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -2739,7 +2743,8 @@ function handleGetTranscript(sessionId: string, res: http.ServerResponse): void 
     }
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ sessionId, messages }));
+    const start = from > 0 && from <= messages.length ? from : 0;
+    res.end(JSON.stringify({ sessionId, messages: messages.slice(start), from: start, total: messages.length, file: path.basename(filePath) }));
   } catch (err) {
     console.error(`[api] Error reading transcript for ${sessionId}:`, err);
     res.writeHead(500, { 'Content-Type': 'application/json' });
