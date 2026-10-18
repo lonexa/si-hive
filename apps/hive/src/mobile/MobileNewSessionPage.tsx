@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Check, EyeOff, FolderOpen, Play, Search, SlidersHorizontal } from 'lucide-react';
+import { Check, ClipboardList, EyeOff, FolderOpen, Play, Search, SlidersHorizontal } from 'lucide-react';
 import { cn, timeAgo } from '@/lib/utils';
 import { PROVIDER_SHORT_NAMES, type CodexReasoningEffort, type ProviderId } from '@/lib/launch-flags';
 import { useAISession } from '@/hooks/useAISession';
 import { useIncognito } from '@/hooks/useIncognito';
+import { useAutoGrow } from '@/hooks/useMobileKeyboard';
 import GenericLaunchDialog from '@/components/shared/GenericLaunchDialog';
 import { Chip, ChipRow, SectionTitle } from './components';
 import { byRecent, useProjects, useProviders } from './use-projects';
@@ -35,7 +36,11 @@ export default function MobileNewSessionPage() {
   const [showAll, setShowAll] = useState(false);
   const [provider, setProvider] = useState<ProviderId | null>(null);
   const [prompt, setPrompt] = useState('');
+  const [typing, setTyping] = useState(false);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
+  useAutoGrow(promptRef, prompt, [typing]);
   const [incognito, setIncognito] = useState(false);
+  const [planFirst, setPlanFirst] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [starting, setStarting] = useState(false);
 
@@ -50,6 +55,9 @@ export default function MobileNewSessionPage() {
 
   const selected = projects.find((p) => p.path === cwd);
   const projectIncognito = cwd ? isProjectIncognito(cwd) : false;
+  // Plan mode is a Claude CLI permission mode; the other CLIs have no equivalent.
+  const canPlan = provider === 'claude';
+  const permissionMode = planFirst && canPlan ? 'plan' : undefined;
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -61,7 +69,7 @@ export default function MobileNewSessionPage() {
     if (!cwd || starting) return;
     setStarting(true);
     markLaunched();
-    void launchSession({ cwd, prompt: prompt.trim(), providerId: provider ?? undefined, incognito: incognito && !projectIncognito });
+    void launchSession({ cwd, prompt: prompt.trim(), providerId: provider ?? undefined, permissionMode, incognito: incognito && !projectIncognito });
   };
 
   const launchAdvanced = (
@@ -79,6 +87,7 @@ export default function MobileNewSessionPage() {
       model: options?.model,
       reasoningEffort: options?.reasoningEffort,
       accountId: options?.accountId,
+      permissionMode: planFirst && (providerId ?? provider) === 'claude' ? 'plan' : undefined,
       incognito: incognito && !projectIncognito,
     });
   };
@@ -149,21 +158,41 @@ export default function MobileNewSessionPage() {
 
       <SectionTitle>First message (optional)</SectionTitle>
       <textarea
+        ref={promptRef}
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
+        onFocus={() => setTyping(true)}
+        onBlur={() => setTyping(false)}
         rows={4}
         placeholder="What should it work on?"
-        className="w-full resize-none rounded-xl border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
+        // Grows with the prompt; while typing it may take half the visible screen.
+        className={cn(
+          'w-full resize-none overflow-y-auto rounded-xl border border-border bg-card px-3 py-2 text-base text-foreground placeholder:text-muted-foreground outline-none focus:border-primary',
+          typing ? 'max-h-[calc(var(--vv-height,100dvh)*0.5)]' : 'max-h-48',
+        )}
       />
 
-      {canToggle && !projectIncognito && (
-        <button
-          type="button"
-          onClick={() => setIncognito(!incognito)}
-          className={cn('mt-2 flex items-center gap-2 self-start rounded-full border px-3 py-1.5 text-xs', incognito ? 'border-violet-500/60 text-violet-300' : 'border-border text-muted-foreground')}
-        >
-          <EyeOff className="h-3.5 w-3.5" /> Incognito {incognito ? 'on' : 'off'}
-        </button>
+      {(canPlan || (canToggle && !projectIncognito)) && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {canPlan && (
+            <button
+              type="button"
+              onClick={() => setPlanFirst(!planFirst)}
+              className={cn('flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs', planFirst ? 'border-primary/60 text-primary' : 'border-border text-muted-foreground')}
+            >
+              <ClipboardList className="h-3.5 w-3.5" /> Plan mode {planFirst ? 'on' : 'off'}
+            </button>
+          )}
+          {canToggle && !projectIncognito && (
+            <button
+              type="button"
+              onClick={() => setIncognito(!incognito)}
+              className={cn('flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs', incognito ? 'border-violet-500/60 text-violet-300' : 'border-border text-muted-foreground')}
+            >
+              <EyeOff className="h-3.5 w-3.5" /> Incognito {incognito ? 'on' : 'off'}
+            </button>
+          )}
+        </div>
       )}
 
       <div className="mt-4 flex gap-2">

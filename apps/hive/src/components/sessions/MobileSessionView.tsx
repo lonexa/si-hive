@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { Terminal } from '@xterm/xterm';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowDown, ArrowLeft, ChevronDown, ChevronRight, Monitor, Send, Square, Wrench } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ChevronDown, ChevronRight, Monitor, Repeat, Send, Square, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { API_BASE, WS_BASE } from '@/lib/api-config';
 import type { ProviderId } from '@/lib/launch-flags';
+import { useAutoGrow, useKeyboardViewport } from '@/hooks/useMobileKeyboard';
 
 /**
  * Phone view of a session. The desktop owns the terminal; the phone never
@@ -51,6 +52,7 @@ const NAV_KEYS: { label: string; data: string }[] = [
 ];
 const FALLBACK_OPTIONS = ['1', '2', '3', '4'].map((n) => ({ num: n, label: n, current: false }));
 const ESC = '\x1b';
+const SHIFT_TAB = '\x1b[Z';
 const PEEK_LINES = 14;
 // Tools that put a menu on screen and wait for the person to pick.
 const INPUT_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
@@ -100,6 +102,25 @@ function findMenu(screenLines: string[]): Menu | null {
   const options = [...byNum.values()];
   const typeOption = options.find((o) => /^(\[.\]\s*)?Type something/i.test(o.label))?.num;
   return { lines: screenLines.slice(top), options, typeOption };
+}
+
+// Claude's footer names the mode it's in ("⏸ plan mode on (shift+tab to
+// cycle)"); the default mode shows nothing.
+const MODE_RE = /(plan mode|accept edits|auto-accept edits|bypass permissions|auto mode) on/i;
+const MODE_LABELS: Record<string, string> = {
+  'plan mode': 'Plan',
+  'accept edits': 'Accept edits',
+  'auto-accept edits': 'Accept edits',
+  'bypass permissions': 'Bypass',
+  'auto mode': 'Auto',
+};
+
+function findMode(screenLines: string[]): string {
+  for (let i = screenLines.length - 1; i >= Math.max(0, screenLines.length - 8); i--) {
+    const m = MODE_RE.exec(screenLines[i]);
+    if (m) return MODE_LABELS[m[1].toLowerCase()] ?? m[1];
+  }
+  return 'Default';
 }
 
 /** The question text from an AskUserQuestion call, for the chat list. */
@@ -170,6 +191,7 @@ function ToolsRow({ tools }: { tools: TranscriptMessage[] }) {
 }
 
 export default function MobileSessionView({ sessionId, title, cwd, projectDir, command, args, provider, account }: Props) {
+  useKeyboardViewport();
   const navigate = useNavigate();
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [connected, setConnected] = useState(false);
@@ -177,6 +199,9 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
   const [peekOpen, setPeekOpen] = useState(false);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [text, setText] = useState('');
+  const [typing, setTyping] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  useAutoGrow(inputRef, text, [typing]);
   const [atBottom, setAtBottom] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -292,6 +317,10 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
     scrollToBottom();
   };
 
+  // Shift+Tab cycles Claude's permission modes (default, accept edits, plan, …).
+  const canCycleMode = !provider || provider === 'claude';
+  const mode = useMemo(() => findMode(peek), [peek]);
+
   const screenRef = useRef<HTMLPreElement>(null);
   const showScreen = asking || peekOpen;
   const screenLines = menu ? menu.lines : peek.slice(-PEEK_LINES);
@@ -301,8 +330,9 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
   }, [screenLines.length, showScreen]);
 
   return (
-    // Full-screen over the app chrome: every pixel matters on a phone.
-    <div className="fixed inset-0 z-40 flex h-dvh flex-col bg-background">
+    // Full-screen over the app chrome: every pixel matters on a phone. Sized
+    // to what the on-screen keyboard leaves visible.
+    <div className="fixed inset-x-0 top-[var(--vv-top,0px)] z-40 flex h-[var(--vv-height,100dvh)] flex-col bg-background">
       <div className="shrink-0 flex items-center gap-2 border-b border-border px-2 py-1.5 bg-card">
         <Button variant="ghost" size="sm" className="h-9 w-9 p-0" onClick={() => ((window.history.state as { idx?: number } | null)?.idx ? navigate(-1) : navigate('/sessions'))} aria-label="Back">
           <ArrowLeft className="h-5 w-5" />
@@ -387,6 +417,9 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
               </Button>
             ))}
             <Button variant="ghost" size="sm" className="h-8 shrink-0 px-2 text-xs" disabled={!connected} onClick={() => sendRaw(ESC)}>Esc</Button>
+            {canCycleMode && (
+              <Button variant="ghost" size="sm" className="h-8 shrink-0 px-2 text-xs" disabled={!connected} onClick={() => sendRaw(SHIFT_TAB)}>Shift+Tab</Button>
+            )}
           </div>
         </div>
       ) : (
@@ -398,6 +431,17 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
           >
             <Monitor className="h-3.5 w-3.5" /> Live screen
           </button>
+          {canCycleMode && (
+            <button
+              type="button"
+              className={cn('flex items-center gap-1.5 rounded px-2 py-1 text-xs disabled:opacity-40', mode === 'Default' ? 'text-muted-foreground' : 'text-primary')}
+              disabled={!connected}
+              onClick={() => sendRaw(SHIFT_TAB)}
+              title="Switch mode (Shift+Tab)"
+            >
+              <Repeat className="h-3.5 w-3.5" /> Mode: {mode}
+            </button>
+          )}
           <button
             type="button"
             className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground disabled:opacity-40"
@@ -410,13 +454,21 @@ export default function MobileSessionView({ sessionId, title, cwd, projectDir, c
         </div>
       )}
 
-      <div className="shrink-0 flex items-end gap-2 border-t border-border px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      {/* The keyboard covers the home indicator, so no safe-area gap above it. */}
+      <div className="shrink-0 flex items-end gap-2 border-t border-border px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] [.keyboard-open_&]:pb-2">
         <textarea
+          ref={inputRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          rows={Math.min(5, Math.max(1, text.split('\n').length))}
+          onFocus={() => setTyping(true)}
+          onBlur={() => setTyping(false)}
+          rows={1}
           placeholder={!connected ? 'Connecting…' : asking ? 'Or type your own answer…' : 'Message Claude…'}
-          className="min-h-10 flex-1 resize-none rounded-2xl border border-border bg-background px-3 py-2 text-base text-foreground placeholder:text-muted-foreground outline-none focus:border-primary"
+          // Grows with the message; while typing it may take half the visible screen.
+          className={cn(
+            'flex-1 resize-none overflow-y-auto rounded-2xl border border-border bg-background px-3 py-2 text-base text-foreground placeholder:text-muted-foreground outline-none focus:border-primary',
+            typing ? 'min-h-24 max-h-[calc(var(--vv-height,100dvh)*0.5)]' : 'min-h-10 max-h-32',
+          )}
         />
         <Button size="sm" className="h-10 w-10 shrink-0 rounded-full p-0" onClick={sendMessage} disabled={!connected || !text.trim()} aria-label="Send">
           <Send className="h-4 w-4" />

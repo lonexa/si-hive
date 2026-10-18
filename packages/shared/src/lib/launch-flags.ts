@@ -149,6 +149,8 @@ export async function buildAIArgs(_prompt: string, options?: {
     args.push('--dangerously-skip-permissions');
   } else if (options?.permissionMode === 'autoMode') {
     args.push('--enable-auto-mode');
+  } else if (options?.permissionMode === 'plan') {
+    args.push('--permission-mode', 'plan');
   } else if (flags.dangerouslySkipPermissions) {
     args.push('--dangerously-skip-permissions');
   } else if (flags.autoMode) {
@@ -270,6 +272,8 @@ export async function buildProviderArgs(providerId: ProviderId, _prompt: string,
       args.push('--dangerously-skip-permissions');
     } else if (options?.permissionMode === 'autoMode') {
       args.push('--enable-auto-mode');
+    } else if (options?.permissionMode === 'plan') {
+      args.push('--permission-mode', 'plan');
     } else if (flags.dangerouslySkipPermissions) {
       args.push('--dangerously-skip-permissions');
     } else if (flags.autoMode) {

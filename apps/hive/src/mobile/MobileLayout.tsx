@@ -7,6 +7,7 @@ import { useDashboardStore } from '@/stores/dashboard-store';
 import { useAuth } from '@/auth/AuthProvider';
 import { useActivityTracker } from '@/hooks/useActivityTracker';
 import { useNowPublisher } from '@/hooks/useNowPublisher';
+import { useKeyboardViewport } from '@/hooks/useMobileKeyboard';
 import NotificationPanel from '@/components/shared/NotificationPanel';
 import MessagesWidget from '@/components/messages/MessagesWidget';
 import IncomingBanner from '@/components/messages/IncomingBanner';
@@ -90,7 +91,8 @@ function TabBar() {
   if (!anyActive) more.active = true;
 
   return (
-    <nav className="shrink-0 border-t border-border bg-card pb-[env(safe-area-inset-bottom)]">
+    // Hidden while the keyboard is up: the space goes to what's being typed.
+    <nav className="shrink-0 border-t border-border bg-card pb-[env(safe-area-inset-bottom)] [.keyboard-open_&]:hidden">
       <div className="flex h-14 items-stretch">
         {items.map((item) => (
           <Link
@@ -133,6 +135,7 @@ export default function MobileLayout() {
   const matches = useMatches();
   const fullBleed = matches.some((m) => (m.handle as MobileRouteHandle | undefined)?.fullBleed);
   const mainRef = useRef<HTMLElement>(null);
+  useKeyboardViewport();
 
   // The page scrolls inside <main>, so the browser won't reset it on navigation.
   useEffect(() => {
@@ -140,7 +143,9 @@ export default function MobileLayout() {
   }, [location.pathname, location.search]);
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-background">
+    // Sized to what the on-screen keyboard leaves visible, so fields near the
+    // bottom aren't hidden under it.
+    <div className="fixed inset-x-0 top-[var(--vv-top,0px)] flex h-[var(--vv-height,100dvh)] flex-col overflow-hidden bg-background">
       <TopBar />
       <main
         ref={mainRef}

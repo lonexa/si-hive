@@ -100,6 +100,8 @@ export const claudeProvider: AIProvider = {
       args.push('--dangerously-skip-permissions');
     } else if (opts?.permissionMode === 'autoMode') {
       args.push('--enable-auto-mode');
+    } else if (opts?.permissionMode === 'plan') {
+      args.push('--permission-mode', 'plan');
     }
 
     if (opts?.model) {
