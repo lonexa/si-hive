@@ -462,7 +462,9 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       // Ctrl+C: if there's a selection, let browser copy it; otherwise send SIGINT
       if (event.ctrlKey && event.key === 'c' && event.type === 'keydown') {
         if (term.hasSelection()) {
-          navigator.clipboard.writeText(term.getSelection());
+          navigator.clipboard.writeText(term.getSelection()).catch((err) => {
+            console.warn('[terminal] clipboard write failed:', err);
+          });
           term.clearSelection();
           return false; // prevent xterm from handling it
         }
@@ -470,6 +472,10 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(function 
       }
       // Ctrl+V: read the clipboard and hand it to xterm.
       if (event.ctrlKey && event.key === 'v' && event.type === 'keydown') {
+        // Over plain http:// on a non-localhost host (e.g. a VPN address) the
+        // browser cannot read the clipboard. Let its native paste event reach
+        // xterm's textarea instead; xterm's own paste handler sends it.
+        if (!window.isSecureContext) return false;
         event.preventDefault(); // prevent browser paste so xterm onData does not double-fire
         navigator.clipboard.readText().then((text) => {
           if (!text) return;

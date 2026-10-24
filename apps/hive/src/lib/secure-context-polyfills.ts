@@ -15,4 +15,31 @@ if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function') {
   } as Crypto['randomUUID'];
 }
 
+if (typeof navigator !== 'undefined' && !navigator.clipboard) {
+  // writeText via the legacy execCommand('copy'), which still works in insecure
+  // contexts while handling a user gesture. Reads have no fallback: callers
+  // that paste must let the browser's native paste event through instead.
+  const unavailable = () => Promise.reject(new DOMException('Clipboard API needs a secure context', 'NotAllowedError'));
+  const clipboard = {
+    writeText(text: string): Promise<void> {
+      const active = document.activeElement as HTMLElement | null;
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch { /* reported below */ }
+      ta.remove();
+      active?.focus?.();
+      return ok ? Promise.resolve() : unavailable();
+    },
+    readText: unavailable,
+    read: unavailable,
+    write: unavailable,
+  };
+  Object.defineProperty(navigator, 'clipboard', { value: clipboard, configurable: true });
+}
+
 export {};
