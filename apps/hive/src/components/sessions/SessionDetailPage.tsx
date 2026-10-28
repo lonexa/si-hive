@@ -103,8 +103,12 @@ export default function SessionDetailPage() {
   const intentForId = sessionId ? readSessionIntent(sessionId) : null;
 
   const effectiveState = locState ?? intentForId;
-  const isNewSession = effectiveState?.newSession === true;
-  const handoff = effectiveState?.handoff;
+  // Only a temp `new-*`/`handoff-*` id is a fresh launch. The intent is
+  // migrated onto the real session id (for its account), so without this gate
+  // a reload after the CLI exited spawned a blank new conversation under the
+  // real id instead of resuming it.
+  const isNewSession = effectiveState?.newSession === true && !!sessionId && /^(new|handoff)-/.test(sessionId);
+  const handoff = isNewSession ? effectiveState?.handoff : undefined;
   // Which credential identity to run under. Only new/handoff launches carry one;
   // a plain resume falls back to the default account, since session transcripts
   // are account-agnostic and can be continued under either identity.

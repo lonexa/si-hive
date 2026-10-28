@@ -540,10 +540,13 @@ export async function spawnPty(
     session.exited = true;
     session.exitCode = exitCode;
     broadcast(session, { type: 'exit', code: exitCode });
-    // Clean up after exit — no point keeping dead sessions
+    // Clean up after exit — no point keeping dead sessions. Use session.id,
+    // not the spawn-time `id`: a `new-*` terminal is re-keyed to its real
+    // session id by renamePtySession, and deleting the stale key would leave
+    // the dead PTY in the map, so every reconnect reattached to it forever.
     clearOrphanTimer(session);
-    forgetActivitySession(id);
-    activeSessions.delete(id);
+    forgetActivitySession(session.id);
+    if (activeSessions.get(session.id) === session) activeSessions.delete(session.id);
   });
 
   activeSessions.set(id, session);

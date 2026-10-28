@@ -2064,7 +2064,13 @@ wssTerm.on('connection', (ws, req: http.IncomingMessage) => {
             const normalizeAccount = (a?: string) => (!a || a === 'default' ? undefined : a);
             const accountChangeRequested =
               !!msg.account && normalizeAccount(msg.account) !== normalizeAccount(existing.accountId);
-            if (accountChangeRequested) {
+            if (existing.exited) {
+              // A dead PTY has nothing to reattach to; replace it with a fresh
+              // spawn (a resume, for a real session id) instead of handing the
+              // viewer a terminal it can never type into.
+              console.log(`[ws-term] Existing PTY for ${termId} has exited - respawning`);
+              destroyPty(termId);
+            } else if (accountChangeRequested) {
               console.log(
                 `[ws-term] Account change for ${termId} ` +
                 `(${existing.accountId ?? 'default'} -> ${msg.account}) - respawning`,
