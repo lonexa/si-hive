@@ -82,7 +82,44 @@ export function createTerminal(
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  installOsc52Clipboard(term);
   return { term, fit };
+}
+
+/**
+ * Honour OSC 52 clipboard writes (`ESC ] 52 ; c ; <base64> BEL`).
+ *
+ * Full-screen TUIs such as Claude Code turn on mouse tracking, so a drag never
+ * becomes an xterm selection: the app draws its own highlight and copies by
+ * sending OSC 52, which xterm.js ignores unless told otherwise. Without this,
+ * selecting and copying in those apps silently did nothing.
+ *
+ * The write goes through navigator.clipboard (polyfilled with
+ * execCommand('copy') over plain http://). The escape arrives a round trip
+ * after the mouse-up or keypress that triggered it, well inside the browser's
+ * few-second user-activation window that the fallback needs. Clipboard reads
+ * (`?`) are refused: a program in the terminal must not read the clipboard.
+ */
+export function installOsc52Clipboard(term: Terminal): void {
+  term.parser.registerOscHandler(52, (data) => {
+    const sep = data.indexOf(';');
+    if (sep < 0) return true;
+    const payload = data.slice(sep + 1);
+    if (!payload || payload === '?') return true;
+    let text: string;
+    try {
+      const bin = atob(payload);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      text = new TextDecoder().decode(bytes);
+    } catch {
+      return true; // malformed base64
+    }
+    navigator.clipboard?.writeText(text).catch((err) => {
+      console.warn('[terminal] OSC 52 clipboard write failed:', err);
+    });
+    return true;
+  });
 }
 
 /**
